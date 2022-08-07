@@ -1,5 +1,6 @@
 # parse gene annotation
 from collections import namedtuple
+import gzip
 
 # Initialized GeneInfo named tuple. Note: namedtuple is immutable
 gffInfoFields = ["seqid", "source", "type", "start",
@@ -53,7 +54,7 @@ def parseGFF3(filename):
     openFunc = gzip.open if filename.endswith(".gz") else open
     attrFunc = parseGTFAttributes if filename.endswith(
         "gtf.gz") or filename.endswith(".gtf") else parseGFFAttributes
-    with openFunc(filename) as infile:
+    with openFunc(filename, 'rt') as infile:
         for line in infile:
             if line.startswith("#"):
                 continue
@@ -141,7 +142,7 @@ def _parse_gff_tree(gff_f):
                     [rec.start-1, rec.end])  # `-1` convert 1 based to 0 based
     for tr in transcript_to_exon:
         # the GENCODE annotation might be un-ordered.
-        transcript_to_exon[tr].sort(key=lambda x: x[0])
+        transcript_to_exon[tr].sort()
         # for genes in XY, there might be duplicates.
         if len(transcript_to_exon[tr]) > 1 and transcript_to_exon[tr][0][0] == transcript_to_exon[tr][1][0]:
             new_ex = [transcript_to_exon[tr][0]]
@@ -150,7 +151,7 @@ def _parse_gff_tree(gff_f):
                     new_ex.append(ex)
             transcript_to_exon[tr] = new_ex
     for ge in gene_to_transcript:
-        gene_to_transcript[ge] = list(set(gene_to_transcript[ge]))
+        gene_to_transcript[ge] = sorted(list(set(gene_to_transcript[ge])))
     return chr_to_gene, transcript_dict, gene_to_transcript, transcript_to_exon
 
 
