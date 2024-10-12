@@ -34,9 +34,10 @@ def parse_gtf_to_df(in_gtf):
             continue
     gene_idx_df = pd.DataFrame({"chr_name": chr_name, "gene_id": gene_id, 
                                 "start": start, "end": end} )
+    
     return gene_idx_df
 
-def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
+def get_read_to_gene_assignment(in_bam: str, gene_idx_df: pd.DataFrame, methods: str , output_r_pos: bool = False):
     """
     Get gene counts from a bam file and a gtf file.
     Input:
@@ -61,23 +62,51 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
     chr_names, gene_ids, bcs, umis, read_ids, positions_3prim, \
         positions_5prim, overlaps, read_lengths = [[] for i in range(9)]
     
-    # process genes in the gene_idx_df
+    # if there is only one gene in the gene_idx_df
+    if gene_idx_df.shape[0] == 1 and not output_r_pos:
+        gene = gene_idx_df.iloc[0]
+        reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
+        for read in reads_fetch:
+            if read.is_supplementary or read.is_secondary or read.is_unmapped:
+                continue
+            # get mapped position
+            bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
+            # append to the list
+            bcs.append(bc)
+            umis.append(umi)
+            read_ids.append(read_id)
+            overlaps.append(read.query_alignment_length)
+
+        bam_file.close()
+        read_gene_assign_df = pd.DataFrame({"bc": bcs, "umi": umis, "read_id": read_ids, "overlap" : overlaps})
+        read_gene_assign_df['chr_name'] = gene.chr_name
+        read_gene_assign_df['gene_id'] = gene.gene_id
+        read_gene_assign_df[['pos_5prim', "pos_3prim", "read_length"]] = np.nan
+
+        return read_gene_assign_df
+
+    else:
+        pass
+            
+
+    # process multiple genes in the gene_idx_df
     for gene in gene_idx_df.itertuples():
         reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
         # for each reads, get the reference_name, mapping position, strand
+        n_read = 0
         for read in reads_fetch:
             if read.is_supplementary or read.is_secondary or read.is_unmapped:
                 continue
             # get mapped position
             bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
             
-            # get the overlaps 
+            # get the overlaps and mapping position of the reads
             if read.reference_start >= gene.start and read.reference_end <= gene.end:
                 # when the read is fully mapped within the gene
                 overlaps.append(read.query_alignment_length)
-                if read.is_reverse ^ (strand == '+'):
+                if output_r_pos and read.is_reverse ^ (strand == '+'):
                     pos3, pos5 =read.reference_end, read.reference_start
-                else:
+                elif output_r_pos:
                     pos3, pos5 = read.reference_start, read.reference_end
             else:
                 # when the read is not fully mapped to the gene
@@ -90,22 +119,31 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
                 else:
                     overlaps.append(in_gene_read_end-in_gene_read_start)
                     # get the mapping position of two ends of the reads in gene
-                    if read.is_reverse ^ (strand == '+'):
+                    if output_r_pos and read.is_reverse ^ (strand == '+'):
                         pos3, pos5 = \
                             ref_positions[in_gene_read_end], ref_positions[in_gene_read_start]
-                    else:
+                    elif output_r_pos:
                         pos3, pos5 = \
                             ref_positions[in_gene_read_start], ref_positions[in_gene_read_end]
 
-            # append to the list
-            positions_5prim.append(pos5)
-            positions_3prim.append(pos3)
+            # for each alignment
+            n_read += 1
+            if output_r_pos:
+                positions_5prim.append(pos5)
+                positions_3prim.append(pos3)
             read_lengths.append(read.reference_end-read.reference_start)
             bcs.append(bc)
             umis.append(umi)
             read_ids.append(read_id)
-            chr_names.append(gene.chr_name)
-            gene_ids.append(gene.gene_id)
+            
+        
+        # for each gene
+        if not output_r_pos:
+            positions_5prim.extend([np.nan]*n_read)
+            positions_3prim.extend([np.nan]*n_read)
+        chr_names.extend([gene.chr_name]*n_read)
+        gene_ids.extend([gene.gene_id]*n_read)
+    
     read_gene_assign_df = pd.DataFrame({"chr_name": chr_names, "gene_id": gene_ids,
                                         "bc": bcs, "umi": umis, "read_id": read_ids,
                                         "pos_5prim": positions_5prim, "pos_3prim": positions_3prim,
@@ -241,8 +279,11 @@ def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3pr
         umi_lst: a list of umi (not deduplicated, in the form of bc+umi+cluster)
     """
 
-    read_gene_assign_df = \
-        get_read_to_gene_assignment(in_bam, in_gtf_df, methods=demulti_methods)
+    read_gene_assign_df =  get_read_to_gene_assignment(
+                            in_bam, 
+                            in_gtf_df, 
+                            methods=demulti_methods, 
+                            output_r_pos=cluster_3prim) # do not output read position when cluster_3prim is False
 
     # cluster reads with similar genome location (polyT side mapping position)
     if verbose:
@@ -261,7 +302,6 @@ def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3pr
     if verbose:
         print("Correcting UMIs ...")
     
-
     read_gene_assign_df['umi_corrected'] = \
         read_gene_assign_df.groupby(['bc','gene_id','cluster'], observed=True)['umi']\
                            .transform(_umi_correction)
