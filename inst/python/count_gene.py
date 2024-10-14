@@ -167,15 +167,16 @@ def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_d
         
     bam_file.close()
     new_df = pd.DataFrame({"read_id": read_ids, "gene_id": gene_ids, "exonic_overlap": overlaps})
+    # new_df = new_df.sample(frac=1)
+    new_df = pd.merge(ambig_df, new_df, on=['read_id', 'gene_id'], how='inner')
     # shuffle the dataframe for tie breaking
     new_df = new_df.sample(frac=1)
-    new_df = new_df.sort_values(by=['read_id', 'exonic_overlap'], ascending = [True, False])
-    new_df = new_df.drop_duplicates(subset='read_id', keep='first')
+    new_df = new_df.sort_values(by=['read_id', 'exonic_overlap', "overlap"], ascending = [True, False, False])
+    recovered_ambig_df = new_df.drop_duplicates(subset='read_id', keep='first')
 
-    #TODO: deal with low exonic_overlap reads
     #subset the ambig_df to match the read_id and gene_id columns in new_df
-    recovered_ambig_df = pd.merge(ambig_df, new_df[['read_id', 'gene_id']], on=['read_id', 'gene_id'], how='inner')
-    unrecovered_ambig_df = ambig_df[~ambig_df.read_id.isin(recovered_ambig_df.read_id)]
+    #unrecovered_ambig_df = ambig_df[~ambig_df.read_id.isin(recovered_ambig_df.read_id)]
+    #recovered_ambig_df = pd.merge(ambig_df, new_df[['read_id', 'gene_id']], on=['read_id', 'gene_id'], how='inner')
     return recovered_ambig_df
     
 
