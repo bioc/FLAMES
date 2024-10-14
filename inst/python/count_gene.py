@@ -101,11 +101,12 @@ def get_read_interval_tree(read):
         if op in match_or_deletion:
             base_position += nt
         elif op == ref_skip:
-            exon_begin = base_position
-            rst.add(Interval(exon_begin, base_position))
+            if exon_begin < base_position:
+                rst.add(Interval(exon_begin, base_position))
+            
             base_position += nt
             exon_begin = base_position
-    if exon_begin != base_position:
+    if exon_begin < base_position:
         rst.add(Interval(exon_begin, base_position))
     return rst
 
@@ -140,14 +141,15 @@ def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_d
         recovered_ambig_df: a dataframe of reads assigned to a single gene
     """
     gene_list = ambig_df.gene_id.unique()
+    read_id_set = set(ambig_df.read_id.values)
     # read bam file
     bam_file = pysam.AlignmentFile(in_bam, "rb")
     
 
     # new df construction
-    read_id = []
-    gene_id = []
-    overlap = []
+    read_ids = []
+    gene_ids = []
+    overlaps = []
     for gene in gene_idx_df[gene_idx_df.gene_id.isin(gene_list)].itertuples():
          # read bam file    
         reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
@@ -155,21 +157,22 @@ def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_d
             if read.is_supplementary or read.is_secondary or read.is_unmapped:
                 continue
             bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
-            if read_id not in ambig_df.read_id:
+            if read_id not in read_id_set:
                 continue
             read_interval = get_read_interval_tree(read)
             exonic_overlap = get_interval_tree_overlap(gene.exon_interval_tree, read_interval)
-            read_id.append(read_id)
-            gene_id.append(gene.gene_id)
-            overlap.append(exonic_overlap)
+            read_ids.append(read_id)
+            gene_ids.append(gene.gene_id)
+            overlaps.append(exonic_overlap)
         
     bam_file.close()
-    new_df = pd.DataFrame({"read_id": read_id, "gene_id": gene_id, "exonic_overlap": overlap})
+    new_df = pd.DataFrame({"read_id": read_ids, "gene_id": gene_ids, "exonic_overlap": overlaps})
     # shuffle the dataframe for tie breaking
     new_df = new_df.sample(frac=1)
     new_df = new_df.sort_values(by=['read_id', 'exonic_overlap'], ascending = [True, False])
     new_df = new_df.drop_duplicates(subset='read_id', keep='first')
 
+    #TODO: deal with low exonic_overlap reads
     #subset the ambig_df to match the read_id and gene_id columns in new_df
     recovered_ambig_df = pd.merge(ambig_df, new_df[['read_id', 'gene_id']], on=['read_id', 'gene_id'], how='inner')
     unrecovered_ambig_df = ambig_df[~ambig_df.read_id.isin(recovered_ambig_df.read_id)]
@@ -295,13 +298,13 @@ def get_read_to_gene_assignment(in_bam,gene_idx_df,methods, output_r_pos):
     read_gene_assign_df.drop_duplicates(subset=['gene_id', 'read_id'], inplace=True)
     # get the unambiguous read to gene assignment
     dup_mask = read_gene_assign_df.duplicated(subset='read_id', keep = False)
-    unambig_df = read_gene_assign_df[~dup_mask]
-    ambig_df = read_gene_assign_df[dup_mask]
+    if dup_mask.sum():
+        unambig_df = read_gene_assign_df[~dup_mask]
+        ambig_df = read_gene_assign_df[dup_mask]
 
     # resolve the read assigned to multipe genes
-    recovered_ambig_df = resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods)
-
-    read_gene_assign_df = pd.concat([unambig_df, recovered_ambig_df])
+        recovered_ambig_df = resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods)
+        read_gene_assign_df = pd.concat([unambig_df, recovered_ambig_df])
     read_gene_assign_df.sort_values(by=['chr_name', 'bc', 'gene_id', 'pos_3prim'], inplace=True)
     read_gene_assign_df[['chr_name', 'bc', 'gene_id']] =\
           read_gene_assign_df[['chr_name','bc', 'gene_id']].astype('category')
