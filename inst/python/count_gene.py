@@ -124,6 +124,51 @@ def get_interval_tree_overlap(tree1, tree2):
     return rst
 
 
+def get_list_overlap(sorted_lst1, sorted_lst2):
+    """
+    Calculate the overlap of two sorted list of tuples (length 2)
+    Assuming not overlapping intervals in the same list
+    """
+    overlap = 0
+    pre_range = (-1, 0)
+    i,j = 0,0
+    while i < len(sorted_lst1) and j < len(sorted_lst2):
+        item1 = sorted_lst1[i]
+        item2 = sorted_lst2[j]
+        if item1 <= item2:
+            overlap += max(pre_range[1] - item1[0], 0) - max(pre_range[1] - item1[1], 0)
+            i += 1
+            pre_range = item1
+        else:
+            overlap += max(pre_range[1] - item2[0], 0) - max(pre_range[1] - item2[1], 0)
+            j += 1
+            pre_range = item2
+    while i < len(sorted_lst1):
+        item = sorted_lst1[i]
+        overlap += max(pre_range[1] - item[0], 0) - max(pre_range[1] - item[1], 0)
+        i+=1
+
+    while j < len(sorted_lst2):
+        item = sorted_lst2[j]
+        overlap += max(pre_range[1] - item[0], 0) - max(pre_range[1] - item[1], 0)
+        j += 1
+    return overlap
+
+def merge_sorted_lists(list1, list2):
+    merged_list = []
+    i, j = 0, 0
+    while i < len(list1) and j < len(list2):
+        if list1[i] < list2[j]:
+            merged_list.append(list1[i])
+            i += 1
+        else:
+            merged_list.append(list2[j])
+            j += 1
+    # Append remaining elements from either list
+    merged_list.extend(list1[i:])
+    merged_list.extend(list2[j:])
+    return merged_list
+
 def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods):
     """
     Resolve the ambiguous assignment of reads to multiple genes.
