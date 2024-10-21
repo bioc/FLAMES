@@ -99,6 +99,10 @@ plot_spatial_pie <- function(spe, features, assay_type = 'counts') {
     p1 <- ggplot2::ggplot(mapping = ggplot2::aes(minX:maxX, minX:maxY))
   }
 
+  color_palette <- RColorBrewer::brewer.pal(8, "Set2") |>
+    head(length(features)) |>
+    setNames(features)
+
   spe <- spe[features, ]
   plot_d <- SpatialExperiment::spatialCoords(spe) |>
     as.data.frame() |>
@@ -107,10 +111,12 @@ plot_spatial_pie <- function(spe, features, assay_type = 'counts') {
   colnames(plot_d) <- c('imageX', 'imageY', features)
   p1 + 
     scatterpie::geom_scatterpie(
-      aes(x = imageX, y = imageY), 
-      data = plot_d, cols = features, pie_scale = 0.6, color = NA) +
+      aes(x = imageX, y = imageY), data = plot_d, 
+      cols = features, pie_scale = 0.3, color = NA) +
+    ggplot2::scale_fill_manual(values = color_palette) +
     coord_fixed() +
-    theme_void()
+    theme_void() +
+    ggplot2::theme(legend.position = "none")
 }
 
 #' Plot spatial pie chart of isoforms
@@ -123,7 +129,9 @@ plot_spatial_pie <- function(spe, features, assay_type = 'counts') {
 #' @importFrom cowplot plot_grid
 #' @export
 plot_spatial_isoform <- function(spe, isoforms, assay_type = 'counts') {
-  isoform_plot <- plot_isoforms(spe, transcript_ids = isoforms)
+  colors <- RColorBrewer::brewer.pal(8, "Set2") |>
+    head(length(isoforms))
+  isoform_plot <- plot_isoforms(spe, transcript_ids = isoforms, colors = colors)
   pie_plot <- plot_spatial_pie(spe, isoforms, assay_type)
-  cowplot::plot_grid(isoform_plot, pie_plot, ncol = 1)
+  cowplot::plot_grid(pie_plot, isoform_plot, ncol = 1, rel_heights = c(4, 1))
 }

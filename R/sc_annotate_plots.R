@@ -202,6 +202,8 @@ get_top_transcript_ids <- function(sce, gene_id, transcript_ids, n) {
 #' @param transcript_ids The transcript ids to plot.
 #' @param n The number of top isoforms to plot from the gene. Ignored if \code{transcript_ids} is provided.
 #' @param format The format of the output, either "plot_grid" or "list".
+#' @param colors A character vector of colors to use for the isoforms.
+#' If not provided, gray will be used. for all isoforms.
 #'
 #' @return When \code{format = "list"}, a list of \code{ggplot} objects is returned. 
 #' Otherwise, a grid of the plots is returned.
@@ -215,7 +217,8 @@ get_top_transcript_ids <- function(sce, gene_id, transcript_ids, n) {
 #' @importFrom cowplot plot_grid
 #' @importFrom GenomeInfoDb seqnames
 #' @export
-plot_isoforms <- function(sce, gene_id, transcript_ids, n = 4, format = "plot_grid") {
+plot_isoforms <- function(sce, gene_id, transcript_ids, n = 4, format = "plot_grid",
+  colors) {
   transcript_ids <- get_top_transcript_ids(sce, gene_id, transcript_ids, n)
   sce <- sce[match(transcript_ids, rowData(sce)$transcript_id), ]
   transcripts <- rowRanges(sce)
@@ -235,11 +238,20 @@ plot_isoforms <- function(sce, gene_id, transcript_ids, n = 4, format = "plot_gr
 
   plot_list <- list()
   for (i in seq_along(transcript_ids)) {
-    p <- ggplot(transcripts[i]) +
-      ggbio::geom_alignment(
+    if (!missing(colors)) {
+      geom_i <- ggbio::geom_alignment(
+        label = FALSE, range.geom = "rect",
+        gap.geom = "arrow", utr.geom = "rect",
+        color = colors[i], fill = colors[i]
+      )
+    } else {
+      geom_i <- ggbio::geom_alignment(
         label = FALSE, range.geom = "rect",
         gap.geom = "arrow", utr.geom = "rect"
-      ) +
+      )
+    }
+    p <- ggplot(transcripts[i]) +
+      geom_i +
       xlim(x_range) +
       theme_void() +
       theme(plot.margin = unit(c(0.5,0,0.5,0), "cm"))

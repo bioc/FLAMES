@@ -4,7 +4,14 @@
 \alias{plot_isoforms}
 \title{Plot isoforms}
 \usage{
-plot_isoforms(sce, gene_id, transcript_ids, n = 4, format = "plot_grid")
+plot_isoforms(
+  sce,
+  gene_id,
+  transcript_ids,
+  n = 4,
+  format = "plot_grid",
+  colors
+)
 }
 \arguments{
 \item{sce}{The \code{SingleCellExperiment} object containing transcript counts, 
@@ -17,6 +24,9 @@ plot_isoforms(sce, gene_id, transcript_ids, n = 4, format = "plot_grid")
 \item{n}{The number of top isoforms to plot from the gene. Ignored if \code{transcript_ids} is provided.}
 
 \item{format}{The format of the output, either "plot_grid" or "list".}
+
+\item{colors}{A character vector of colors to use for the isoforms.
+If not provided, gray will be used. for all isoforms.}
 }
 \value{
 When \code{format = "list"}, a list of \code{ggplot} objects is returned. 
