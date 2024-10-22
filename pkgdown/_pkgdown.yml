@@ -57,6 +57,11 @@ reference:
     contents:
       - combine_sce
       - sc_impute_transcript
+  - title: Analysis of spatial transcriptomics data
+    contents:
+      - create_spe
+      - plot_spatial_isoform
+      - plot_spatial_pie
   - title: Miscellaneous
     contents:
       - create_config
