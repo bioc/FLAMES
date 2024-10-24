@@ -136,10 +136,5 @@ check_arguments <- function(annotation, fastq, genome_bam,
     }
   }
 
-  n_cores <- parallel::detectCores()
-  if (!is.na(n_cores) && config$pipeline_parameters$threads > n_cores) {
-    cat("Configured to use", config$pipeline_parameters$threads, "cores, detected", n_cores, "\n")
-  }
-
   return(list(config = config))
 }

@@ -1,3 +1,7 @@
+#' @importFrom tibble as_tibble tibble
+#' @importFrom tidyr pivot_longer
+#' @importFrom tidyselect matches
+#' @importFrom dplyr group_by mutate ungroup
 variant_count_tb <- function(bam_path, seqname, pos, indel, barcodes, verbose = TRUE) {
   # allele by barcode matrix (value: read count)
   tryCatch(
@@ -35,6 +39,9 @@ variant_count_tb <- function(bam_path, seqname, pos, indel, barcodes, verbose = 
 #' Variant count for single-cell data
 #'
 #' Count the number of reads supporting each variants at the given positions for each cell.
+#'
+#' @importFrom BiocParallel bplapply bpmapply MulticoreParam
+#' @importFrom dplyr mutate select bind_rows
 #'
 #' @param bam_path character(1) or character(n): path to the bam file(s) aligned to the
 #' reference genome (NOT the transcriptome! Unless the postions are also from the transcriptome).
@@ -92,12 +99,17 @@ sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes,
         is.character(barcodes)
     )
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Got 1 bam file, parallelizing over each position ..."))
-    variants <- parallel::mcmapply(
-      FUN = function(seqname, pos) {
-        variant_count_tb(bam_path, seqname, pos, indel, barcodes, verbose = FALSE)
-      },
-      seqname = seqnames, pos = positions, SIMPLIFY = FALSE, mc.cores = threads
-    )
+    variants <- tryCatch({
+      BiocParallel::bpmapply(
+        function(seqname, pos) {
+          variant_count_tb(bam_path, seqname, pos, indel, barcodes, verbose = FALSE)
+        },
+        seqname = seqnames, pos = positions, SIMPLIFY = FALSE,
+        BPPARAM = BiocParallel::MulticoreParam(
+          workers = threads, stop.on.error = TRUE, progressbar = TRUE
+        )
+      )
+    }, error = identity)
   } else {
     # multiple bam files, parallelize over bam files
     stopifnot(
@@ -119,15 +131,24 @@ sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes,
       dplyr::select(-mutation_index, -bam_index)
 
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Multi-threading over bam files x positions ..."))
-    variants <- parallel::mcmapply(
-      FUN = function(sample_bam, seqname, pos, sample_barcodes) {
-        variant_count_tb(sample_bam, seqname, pos, indel, sample_barcodes, verbose = FALSE) |>
-          dplyr::mutate(bam_file = sample_bam)
-      },
-      sample_bam = args_grid$sample_bam, seqname = args_grid$seqname,
-      pos = args_grid$pos, sample_barcodes = args_grid$sample_barcodes,
-      SIMPLIFY = FALSE, mc.cores = threads
-    )
+    variants <- tryCatch({
+      BiocParallel::bpmapply(
+        function(sample_bam, seqname, pos, sample_barcodes) {
+          variant_count_tb(sample_bam, seqname, pos, indel, sample_barcodes, verbose = FALSE) |>
+            dplyr::mutate(bam_file = sample_bam)
+        },
+        sample_bam = args_grid$sample_bam, seqname = args_grid$seqname,
+        pos = args_grid$pos, sample_barcodes = args_grid$sample_barcodes,
+        SIMPLIFY = FALSE, BPPARAM = BiocParallel::MulticoreParam(
+          workers = threads, stop.on.error = TRUE, progressbar = TRUE
+        )
+      )
+    }, error = identity)
+  }
+
+  if (inherits(variants, "error")) {
+    warning("Error occurred in `sc_mutations`, returning error object")
+    return(variants)
   }
 
   message(paste0(format(Sys.time(), "%H:%M:%S "), "Merging results ..."))
@@ -143,42 +164,57 @@ extract_nt <- function(ref, seqname, pos) {
   }, seqname, pos)
 }
 
+#' @importFrom BiocParallel bplapply bpmapply MulticoreParam
+#' @importFrom dplyr mutate pull
 homopolymer_pct <- function(ref, seqname, pos, include_alt = FALSE, n = 3, threads = 1) {
-  parallel::mcmapply(
-    FUN = function(seqname, pos, include_alt) {
-      if (pos == 1 | pos == length(ref[[seqname]])) {
-        return(TRUE) # variant at the ends should not be considered
-      }
-      start <- max(1, pos - n)
-      end <- min(length(ref[[seqname]]), pos + n)
-      if (include_alt) {
-        ref[[seqname]][start:end] |>
-          as.character() |>
-          strsplit("") |>
-          unlist() |>
-          table() |>
-          as.data.frame() |>
-          dplyr::mutate(pct = Freq / sum(Freq)) |>
-          dplyr::pull(pct) |>
-          max()
-      } else {
-        # exclude the position itself
-        ref[[seqname]][c(start:(pos - 1), (pos + 1):end)] |>
-          as.character() |>
-          strsplit("") |>
-          unlist() |>
-          table() |>
-          as.data.frame() |>
-          dplyr::mutate(pct = Freq / sum(Freq)) |>
-          dplyr::pull(pct) |>
-          max()
-      }
-    }, seqname, pos, include_alt, mc.cores = threads
-  )
+  pcts <- tryCatch({
+    BiocParallel::bpmapply(
+      function(seqname, pos, include_alt) {
+        if (pos == 1 | pos == length(ref[[seqname]])) {
+          return(TRUE) # variant at the ends should not be considered
+        }
+        start <- max(1, pos - n)
+        end <- min(length(ref[[seqname]]), pos + n)
+        if (include_alt) {
+          ref[[seqname]][start:end] |>
+            as.character() |>
+            strsplit("") |>
+            unlist() |>
+            table() |>
+            as.data.frame() |>
+            dplyr::mutate(pct = Freq / sum(Freq)) |>
+            dplyr::pull(pct) |>
+            max()
+        } else {
+          # exclude the position itself
+          ref[[seqname]][c(start:(pos - 1), (pos + 1):end)] |>
+            as.character() |>
+            strsplit("") |>
+            unlist() |>
+            table() |>
+            as.data.frame() |>
+            dplyr::mutate(pct = Freq / sum(Freq)) |>
+            dplyr::pull(pct) |>
+            max()
+        }
+      },
+      seqname, pos, include_alt, SIMPLIFY = TRUE,
+      BPPARAM = BiocParallel::MulticoreParam(
+        workers = threads, stop.on.error = TRUE, progressbar = TRUE
+      )
+    )
+  }, error = identity)
+  if (inherits(pcts, "error")) {
+    warning("Error occurred while running `homopolymer_pct`, returning error object")
+  }
+  return(pcts)
 }
 
 # WIP: too much sequencing errrors / splice sites
 # find variants in a single grange
+#' @importFrom Rsamtools pileup PileupParam ScanBamParam
+#' @importFrom dplyr select mutate group_by ungroup filter
+#' @importFrom S4Vectors mcols
 find_variants_grange <- function(bam_path, reference, gene_grange, min_nucleotide_depth,
                                  names_from) {
   # read bam file
@@ -233,6 +269,14 @@ find_variants_grange <- function(bam_path, reference, gene_grange, min_nucleotid
 #' the chromosome names field as `>chr1 1` instead of `>chr1`. You may need to remove
 #' the trailing number to match the chromosome names in the bam file, for example with
 #' \code{names(ref) <- sapply(names(ref), function(x) strsplit(x, " ")[[1]][1])}.
+#'
+#' @importFrom Biostrings readDNAStringSet
+#' @importFrom rtracklayer import
+#' @importFrom S4Vectors mcols
+#' @importFrom GenomeInfoDb seqnames seqlengths seqinfo
+#' @importFrom GenomicRanges gaps
+#' @importFrom BiocParallel bplapply bpmapply MulticoreParam
+#' @importFrom dplyr bind_rows mutate
 #'
 #' @param bam_path character(1) or character(n): path to the bam file(s) aligned to the
 #' reference genome (NOT the transcriptome!).
@@ -304,7 +348,7 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
     }
     GenomeInfoDb::seqinfo(annotation) <-
       reference[GenomeInfoDb::seqnames(GenomeInfoDb::seqinfo(annotation))] |>
-        Biostrings::seqinfo()
+      Biostrings::seqinfo()
     if (any(is.na(GenomeInfoDb::seqlengths(annotation)))) {
       stop("Missing seqlengths in seqinfo of annotation")
     }
@@ -313,12 +357,16 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
 
   if (length(bam_path) == 1) {
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Got 1 bam file, parallelizing over each region ..."))
-    variants <- parallel::mclapply(
-      sapply(seq_along(annotation), function(x) annotation[x]), function(grange) {
-        find_variants_grange(bam_path, reference, grange, min_nucleotide_depth, names_from)
-      },
-      mc.cores = threads
-    )
+    variants <- tryCatch({
+      BiocParallel::bplapply(
+        sapply(seq_along(annotation), function(x) annotation[x]),
+        function(grange) {
+          find_variants_grange(bam_path, reference, grange, min_nucleotide_depth, names_from)
+        },
+        BPPARAM = BiocParallel::MulticoreParam(
+          workers = threads, stop.on.error = TRUE, progressbar = TRUE # interactive()
+        )
+      )}, error = identity)
   } else {
     # multi-threading over bam files x granges
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Got multiple bam files, preparing for multi-threading ..."))
@@ -329,28 +377,39 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
     )
 
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Multi-threading over bam files x ranges ..."))
-    variants <- parallel::mcmapply(
-      FUN = function(bam, grange) {
-        find_variants_grange(bam, reference, annotation[grange], min_nucleotide_depth, names_from)
-      },
-      bam = args_grid$bam, grange = args_grid$grange, mc.cores = threads,
-      SIMPLIFY = FALSE
-    )
+    variants <- tryCatch({
+      BiocParallel::bpmapply(
+        function(bam, grange) {
+          find_variants_grange(bam, reference, annotation[grange], min_nucleotide_depth, names_from)
+        },
+        bam = args_grid$bam, grange = args_grid$grange,
+        SIMPLIFY = FALSE,
+        BPPARAM = BiocParallel::MulticoreParam(
+          workers = threads, stop.on.error = TRUE, progressbar = TRUE # interactive()
+        )
+      )
+    }, error = identity)
+  }
+
+  if (inherits(variants, "error")) {
+    warning("Error occurred in `find_variants`, returning error object")
+    return(variants)
   }
 
   message(paste0(format(Sys.time(), "%H:%M:%S "), "Merging results ..."))
   variants <- dplyr::bind_rows(variants)
-  if (nrow(variants) == 0) {
-    # otherwise homopolymer_pct will fail
-    return(variants)
-  }
 
   if (homopolymer_window > 1) {
-    message(paste0(format(Sys.time(), "%H:%M:%S "), "Calculating homopolymer percentages ..."))
-    variants$homopolymer_pct <- homopolymer_pct(
-      reference, variants$seqnames, variants$pos,
-      include_alt = FALSE, n = homopolymer_window, threads = threads
-    )
+    if (nrow(variants) == 0) {
+      variants <- variants |>
+        dplyr::mutate(homopolymer_pct = numeric(0))
+    } else {
+      message(paste0(format(Sys.time(), "%H:%M:%S "), "Calculating homopolymer percentages ..."))
+      variants$homopolymer_pct <- homopolymer_pct(
+        reference, variants$seqnames, variants$pos,
+        include_alt = FALSE, n = homopolymer_window, threads = threads
+      )
+    }
   }
 
   return(variants)
