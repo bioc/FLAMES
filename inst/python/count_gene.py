@@ -224,7 +224,7 @@ def merge_sorted_lists(list1, list2):
     merged_list.extend(list2[j:])
     return merged_list
 
-def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods):
+def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods, random_seed):
     """
     Resolve the ambiguous assignment of reads to multiple genes.
     Steps:
@@ -270,7 +270,7 @@ def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_d
     # new_df = new_df.sample(frac=1)
     new_df = pd.merge(ambig_df, new_df, on=['read_id', 'gene_id'], how='inner')
     # shuffle the dataframe for tie breaking
-    new_df = new_df.sample(frac=1)
+    new_df = new_df.sample(frac=1, random_state=random_seed)
     new_df = new_df.sort_values(by=['read_id', 'exonic_overlap', "overlap"], ascending = [True, False, False])
     recovered_ambig_df = new_df.drop_duplicates(subset='read_id', keep='first')
 
@@ -281,7 +281,7 @@ def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_d
     
 
 
-def get_read_to_gene_assignment(in_bam,gene_idx_df,methods, output_r_pos):
+def get_read_to_gene_assignment(in_bam,gene_idx_df,methods, output_r_pos, random_seed):
     """
     Get gene counts from a bam file and a gtf file.
     Input:
@@ -404,7 +404,7 @@ def get_read_to_gene_assignment(in_bam,gene_idx_df,methods, output_r_pos):
         ambig_df = read_gene_assign_df[dup_mask]
 
     # resolve the read assigned to multipe genes
-        recovered_ambig_df = resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods)
+        recovered_ambig_df = resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods, random_seed=random_seed)
         read_gene_assign_df = pd.concat([unambig_df, recovered_ambig_df])
     read_gene_assign_df.sort_values(by=['chr_name', 'bc', 'gene_id', 'pos_3prim'], inplace=True)
     read_gene_assign_df[['chr_name', 'bc', 'gene_id']] =\
@@ -439,7 +439,7 @@ def flames_read_id_parser(read_id, methods = 'flexiplex'):
     else:
         sys.exit("Please specify the correct methods: 'flexiplex' or 'blaze'")
 
-def quantify_gene(in_bam, in_gtf, n_process):
+def quantify_gene(in_bam, in_gtf, n_process, random_seed=2024):
     """A multi-process wrapper of quantify_gene_single_process 
        Processing strategy:
         1. split the gtf file by chromosome
@@ -478,7 +478,8 @@ def quantify_gene(in_bam, in_gtf, n_process):
                             preserve_order = False,
                             n_process=n_process, 
                             in_bam=in_bam, 
-                            demulti_methods=demulti_methods):
+                            demulti_methods=demulti_methods,
+                            random_seed=random_seed):
         
         gene_count_mat, dedup_read_lst_sub, umi_list_sub = future.result()
         gene_count_mat_dfs.append(gene_count_mat)
@@ -492,7 +493,7 @@ def quantify_gene(in_bam, in_gtf, n_process):
     
     return gene_count_mat, dedup_read_lst, umi_lst
 
-def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3prim = False, verbose=False):
+def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3prim = False, verbose=False, random_seed=2024):
     """
     Get gene counts from a bam file and a gtf file.
     Input:
@@ -510,7 +511,8 @@ def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3pr
                             in_bam, 
                             in_gtf_df, 
                             methods=demulti_methods, 
-                            output_r_pos=cluster_3prim) # do not output read position when cluster_3prim is False
+                            output_r_pos=cluster_3prim,
+                            random_seed = random_seed) # do not output read position when cluster_3prim is False
 
     # cluster reads with similar genome location (polyT side mapping position)
     if verbose:
@@ -742,7 +744,7 @@ def subset_reads_from_fastq(in_fastq, out_fastq, read_id_lst,
 # this is the main function
 def quantification(annotation, outdir, pipeline, 
                   n_process=12, saturation_curve=True,
-                  infq=None,  sample_names=None, **kwargs):
+                  infq=None,  sample_names=None, random_seed=2024, **kwargs):
     if pipeline == "sc_single_sample":
         if not infq:
             infq = os.path.join(outdir, "matched_reads.fastq")
@@ -752,7 +754,7 @@ def quantification(annotation, outdir, pipeline,
         out_fastq = os.path.join(outdir, "matched_reads_dedup.fastq")
 
         gene_count_mat, dedup_read_lst, umi_lst = \
-                                quantify_gene(in_bam, annotation, n_process)
+                                quantify_gene(in_bam, annotation, n_process, random_seed=random_seed)
 
         gene_count_mat.to_csv(out_csv)
 
@@ -783,7 +785,7 @@ def quantification(annotation, outdir, pipeline,
             #out_read_lst = os.path.join(outdir, sample+ "_"+"deduplicated_read_id.txt")
             
             gene_count_mat, dedup_read_lst, umi_lst = \
-                                    quantify_gene(sample_bam, annotation, n_process)
+                                    quantify_gene(sample_bam, annotation, n_process, random_seed=random_seed)
 
             #pd.DataFrame({'umi':umi_lst}).to_csv(f"{outdir}/{sample}_umi_lst.csv")
 

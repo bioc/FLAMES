@@ -252,8 +252,15 @@ sc_long_pipeline <- function(
   if (config$pipeline_parameters$do_gene_quantification) {
     cat(format(Sys.time(), "%X %a %b %d %Y"), "Start gene quantification and UMI deduplication\n")
 
+    # get the random seed (if set in pipeline_parameters)
+    if (is.null(config$pipeline_parameters$seed)) {
+      random_seed <- 2024
+    } else {
+      random_seed <- config$pipeline_parameters$seed
+    }
+
     quantify_gene(annotation, outdir, infq, config$pipeline_parameters$threads,
-      pipeline = "sc_single_sample"
+      pipeline = "sc_single_sample", random_seed = random_seed
     )
 
     cat(format(Sys.time(), "%X %a %b %d %Y"), "Gene quantification and UMI deduplication done!\n")
