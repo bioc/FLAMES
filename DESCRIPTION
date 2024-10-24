@@ -29,6 +29,7 @@ Encoding: UTF-8
 Imports: 
     basilisk,
     bambu,
+    BiocParallel,
     Biostrings,
     BiocGenerics,
     circlize,

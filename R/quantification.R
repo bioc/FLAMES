@@ -158,14 +158,20 @@ quantify_transcript_flames <- function(annotation, outdir, config, pipeline = "s
     stop("Incorrect number of realignment files found.\n")
   }
 
+  known_transcripts <- annotation |>
+    rtracklayer::import(feature.type = 'transcript') |>
+    S4Vectors::mcols() |>
+    (\(x) x$transcript_id)()
+
   basiliskRun(
-    env = flames_env, fun = function(config_dict, annotation, outdir, pipeline) {
+    env = flames_env, fun = function(config_dict, annotation, known_transcripts, outdir, pipeline) {
       python_path <- system.file("python", package = "FLAMES")
       count <- reticulate::import_from_path("count_tr", python_path)
-      count$quantification(config_dict, annotation, outdir, pipeline)
+      count$quantification(config_dict, annotation, known_transcripts, outdir, pipeline)
     },
     config_dict = reticulate::dict(config),
     annotation = annotation,
+    known_transcripts = known_transcripts,
     outdir = outdir,
     pipeline = pipeline
   )

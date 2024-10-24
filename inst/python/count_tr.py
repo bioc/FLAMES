@@ -157,7 +157,7 @@ def query_len(cigar_string, hard_clipping=False):
     return result
 
 
-def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_read_coverage, bc_file = False):
+def parse_realigned_bam(bam_in, fa_idx_f, known_transcripts, min_sup_reads, min_tr_coverage, min_read_coverage, bc_file = False):
     """
     """
     fa_idx = dict((it.strip().split()[0], int(
@@ -200,8 +200,8 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
         if tr not in fa_idx:
             cnt_stat["not_in_annotation"] += 1
             print("\t" + str(tr), "not in annotation ???")
-    tr_kept = dict((tr, tr) for tr in tr_cov_dict if len(
-        [it for it in tr_cov_dict[tr] if it > 0.9]) > min_sup_reads)
+    tr_kept = set(tr for tr in tr_cov_dict if 
+        (len([it for it in tr_cov_dict[tr] if it > 0.9]) >= min_sup_reads) or tr in known_transcripts)
     
     #unique_tr_count = Counter(read_dict[r][0][0]
     #                          for r in read_dict if read_dict[r][0][2] > 0.9)
@@ -255,7 +255,7 @@ def parse_realigned_bam(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_re
     print(("\t" + str(cnt_stat)))
     return bc_tr_count_dict, bc_tr_badcov_count_dict, tr_kept
     
-def realigment_min_sup_reads_filter(bam_list, fa_idx_f, min_sup_reads):
+def realigment_min_sup_reads_filter(bam_list, fa_idx_f, known_transcripts, min_sup_reads):
     fa_idx = dict((it.strip().split()[0], int(
         it.strip().split()[1])) for it in open(fa_idx_f))
     tr_cov_dict = {}
@@ -269,7 +269,8 @@ def realigment_min_sup_reads_filter(bam_list, fa_idx_f, min_sup_reads):
             tr_cov = float(rec.reference_end-rec.reference_start)/fa_idx[tr]
             tr_cov_dict[tr] = tr_cov_dict.setdefault(tr, 0) + (1 if tr_cov > 0.9 else 0)
 
-    return set(tr for tr in tr_cov_dict if tr_cov_dict[tr] >= min_sup_reads)
+    return set(tr for tr in tr_cov_dict if 
+        tr_cov_dict[tr] >= min_sup_reads or tr in known_transcripts)
 
 
 def parse_realigned_bam_sc_multi_sample(bam_in, fa_idx_f, tr_kept, min_tr_coverage, min_read_coverage):
@@ -357,7 +358,7 @@ def parse_realigned_bam_sc_multi_sample(bam_in, fa_idx_f, tr_kept, min_tr_covera
     print(("\t" + str(cnt_stat)))
     return bc_tr_count_dict, bc_tr_badcov_count_dict
 
-def parse_realigned_bam_bulk(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_read_coverage):
+def parse_realigned_bam_bulk(bam_in, fa_idx_f, known_transcripts, min_sup_reads, min_tr_coverage, min_read_coverage):
     """
     """
     print("Inputs: ", bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, min_read_coverage)
@@ -400,8 +401,8 @@ def parse_realigned_bam_bulk(bam_in, fa_idx_f, min_sup_reads, min_tr_coverage, m
             if tr not in fa_idx:
                 cnt_stat["not_in_annotation"] += 1
                 print("\t" + str(tr), "not in annotation ???")
-    tr_kept = dict((tr, tr) for tr in tr_cov_dict if len(
-        [it for it in tr_cov_dict[tr] if it > 0.9]) > min_sup_reads)
+    tr_kept = set(tr for tr in tr_cov_dict if 
+        (len([it for it in tr_cov_dict[tr] if it > 0.9]) >= min_sup_reads) or tr in known_transcripts)
     #unique_tr_count = Counter(read_dict[r][0][0]
     #                          for r in read_dict if read_dict[r][0][2] > 0.9)
     for r, v in read_dict.items():
@@ -518,7 +519,7 @@ def realigned_bam_coverage(bam_in, fa_idx_f, coverage_dir):
     tr_cov_f.close()
 
 # this is the main function
-def quantification(config_dict, annotation, outdir, pipeline):
+def quantification(config_dict, annotation, known_transcripts, outdir, pipeline):
     transcript_fa_idx = os.path.join(outdir, "transcript_assembly.fa.fai")
 
 
@@ -546,9 +547,10 @@ def quantification(config_dict, annotation, outdir, pipeline):
         realign_bam = os.path.join(outdir, "realign2transcript.bam")
         tr_cnt_csv = os.path.join(outdir, "transcript_count.csv.gz")
         tr_badcov_cnt_csv = os.path.join(outdir, "transcript_count.bad_coverage.csv.gz")
-        bc_tr_count_dict, bc_tr_badcov_count_dict, tr_kept = parse_realigned_bam(
+        bc_tr_count_dict, bc_tr_badcov_count_dict, _ = parse_realigned_bam(
             realign_bam,
             transcript_fa_idx,
+            known_transcripts,
             config_dict["isoform_parameters"]["min_sup_cnt"],
             config_dict["transcript_counting"]["min_tr_coverage"],
             config_dict["transcript_counting"]["min_read_coverage"],
@@ -574,9 +576,10 @@ def quantification(config_dict, annotation, outdir, pipeline):
         realign_bam = [os.path.join(outdir, f) for f in os.listdir(outdir) if f[-22:] == "realign2transcript.bam"]
         tr_cnt_csv = os.path.join(outdir, "transcript_count.csv.gz")
         tr_badcov_cnt_csv = os.path.join(outdir, "transcript_count.bad_coverage.csv.gz")
-        bc_tr_count_dict, bc_tr_badcov_count_dict, tr_kept = parse_realigned_bam_bulk(
+        bc_tr_count_dict, bc_tr_badcov_count_dict, _ = parse_realigned_bam_bulk(
             realign_bam,
             transcript_fa_idx,
+            known_transcripts,
             config_dict["isoform_parameters"]["min_sup_cnt"],
             config_dict["transcript_counting"]["min_tr_coverage"],
             config_dict["transcript_counting"]["min_read_coverage"])
@@ -601,7 +604,7 @@ def quantification(config_dict, annotation, outdir, pipeline):
 
     elif pipeline == "sc_multi_sample":
         realign_bam = [os.path.join(outdir, f) for f in os.listdir(outdir) if f[-23:] == "_realign2transcript.bam"]
-        tr_kept = realigment_min_sup_reads_filter(realign_bam, transcript_fa_idx, config_dict["isoform_parameters"]["min_sup_cnt"])
+        tr_kept = realigment_min_sup_reads_filter(realign_bam, transcript_fa_idx, known_transcripts, config_dict["isoform_parameters"]["min_sup_cnt"])
         
         chr_to_gene_i, transcript_dict_i, gene_to_transcript_i, transcript_to_exon_i = futures['parse_gff_tree_iso'].result()
         if flag_iso_ident: 

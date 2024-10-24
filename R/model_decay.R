@@ -414,7 +414,14 @@ plot_coverage <- function(x, quantiles = c(0, 0.2375, 0.475, 0.7125, 0.95, 1),
   }
   if (detailed) {
     plot_list <- list(main = p)
-    for (i in unique(transcript_info$length_bin)) {
+    detailed_length_bins <- transcript_info |>
+      dplyr::arrange(tr_length) |>
+      dplyr::group_by(length_bin) |>
+      dplyr::slice(1) |>
+      dplyr::ungroup() |>
+      dplyr::pull(length_bin)
+
+    for (i in detailed_length_bins) {
       p_i <- transcript_info |>
         dplyr::filter(length_bin == i) |>
         dplyr::arrange(desc(read_counts)) |>
@@ -426,6 +433,7 @@ plot_coverage <- function(x, quantiles = c(0, 0.2375, 0.475, 0.7125, 0.95, 1),
         ggplot2::xlab("% Position in transcript") +
         ggplot2::ylab("Weighted average coverage") +
         ggplot2::theme_minimal() +
+        ggplot2::ggtitle(i) +
         ggplot2::guides(color = ggplot2::guide_legend(title = "Transcript ID"))
       plot_list[[i]] <- p_i
     }

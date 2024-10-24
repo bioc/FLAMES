@@ -298,7 +298,13 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
   if (!annotated_region_only) {
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Adding unannotated gaps ..."))
     # parsed annotation might not have seqlengths in seqinfo
-    GenomeInfoDb::seqinfo(annotation) <- Biostrings::seqinfo(reference)
+    if (!all(as.character(GenomeInfoDb::seqnames(annotation)) %in% names(reference))) {
+      warning("Some seqnames in annotation not found in reference")
+      annotation <- annotation[as.character(GenomeInfoDb::seqnames(annotation)) %in% names(reference)]
+    }
+    GenomeInfoDb::seqinfo(annotation) <-
+      reference[GenomeInfoDb::seqnames(GenomeInfoDb::seqinfo(annotation))] |>
+        Biostrings::seqinfo()
     if (any(is.na(GenomeInfoDb::seqlengths(annotation)))) {
       stop("Missing seqlengths in seqinfo of annotation")
     }
