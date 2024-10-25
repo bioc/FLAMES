@@ -270,10 +270,18 @@ sc_long_multisample_pipeline <- function(annotation, fastqs, outdir, genome_fa,
     cat("#### Skip aligning reads to genome\n")
   }
 
+
+    # get the random seed (if set in pipeline_parameters)
+    if (is.null(config$pipeline_parameters$seed)) {
+      random_seed <- 2024
+    } else {
+      random_seed <- config$pipeline_parameters$seed
+    }
+
   # gene quantification and UMI deduplication
   if (config$pipeline_parameters$do_gene_quantification) {
     quantify_gene(annotation, outdir, infqs, config$pipeline_parameters$threads,
-      pipeline = "sc_multi_sample", samples = names(fastqs)
+      pipeline = "sc_multi_sample", samples = names(fastqs), random_seed = random_seed
     )
   }
 

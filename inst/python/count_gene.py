@@ -6,7 +6,7 @@ import pysam
 import gzip
 import numpy as np
 import pandas as pd
-from parse_gene_anno import parseGFF3
+# from intervaltree import Interval, IntervalTree
 import re
 from collections import Counter
 import fast_edit_distance
@@ -15,14 +15,14 @@ import matplotlib.pyplot as plt
 import bisect
 from collections import namedtuple
 
+import parse_gene_anno
 import helper
-#import cProfile
 
 def parse_gtf_to_df(in_gtf):
     """
     Parse gtf file to a dataframe.
     """
-    gtf = parseGFF3(in_gtf)
+    gtf = parse_gene_anno.parseGFF3(in_gtf)
     chr_name, gene_id, start, end = [[] for i in range(4)]
     for entry in gtf:
         if entry.type == "gene":
@@ -34,15 +34,261 @@ def parse_gtf_to_df(in_gtf):
             continue
     gene_idx_df = pd.DataFrame({"chr_name": chr_name, "gene_id": gene_id, 
                                 "start": start, "end": end} )
+    
+
+    _, _, gene_to_transcript, transcript_to_exon = parse_gene_anno.parse_gff_tree(in_gtf)
+    # apply get_exon_interval_tree to each gene and store the result in a new column
+    gene_idx_df['exon_interval_tree'] = gene_idx_df.gene_id.apply(lambda x: get_exon_interval_list(x, gene_to_transcript, transcript_to_exon))
+    
     return gene_idx_df
 
-def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
+
+# def resolve_ambiguous_assignment(ambig_df):
+#     """
+#     Resolve the ambiguous assignment of reads to multiple genes.
+#     Input: 
+#         ambig_df: a dataframe of reads assigned to multiple genes
+#     Output:
+#         recovered_ambig_df: a dataframe of reads assigned to a single gene
+#     """
+#     ambig_df = ambig_df.sort_values(
+#         by=['read_id','overlap'], ascending = [True, False])
+#     
+#     # for the read assigned to multiple genes, keep the one with the largest overlap
+#     pre_id, pre_overlap, pre_idx = None, None, None
+#     row_idx_to_drop = []
+#     for read in ambig_df.itertuples():
+#         if read.read_id != pre_id:
+#             pre_id, pre_overlap, pre_idx = \
+#                 read.read_id, read.overlap, read.Index
+#         elif read.overlap < pre_overlap:
+#             row_idx_to_drop.append(read.Index)
+#         elif read.overlap == pre_overlap:
+#             row_idx_to_drop.append(read.Index)
+#             row_idx_to_drop.append(pre_idx)
+#             
+#     recovered_ambig_df = ambig_df.drop(row_idx_to_drop)
+#     return recovered_ambig_df
+# 
+# 
+# def get_exon_interval_tree(gene_id:str, gene_to_transcript:dict, transcript_to_exon:dict):
+#     """
+#     gene_id: a row of gene_idx_df
+#     """
+#     exons = []
+#     for transcript in gene_to_transcript[gene_id]:
+#         exons.extend(transcript_to_exon[transcript])
+# 
+#     # sort and merge overlapping exons
+#     exon_interval_tree = IntervalTree(Interval(start, end) for start, end in exons)
+#     exon_interval_tree.merge_overlaps()
+#     return exon_interval_tree
+# 
+# 
+# 
+# def get_read_interval_tree(read):
+#     """
+#     Get the interval tree of the read mapping position.
+#     Parameters:
+#         read: pysam.AlignedSegment
+#     Output:
+#         interval_tree: IntervalTree
+#     """
+#     rst = IntervalTree()
+#     match_or_deletion = {0, 2, 7, 8} # only M/=/X (0/7/8) and D (2) are related to genome position
+#     ref_skip = 3
+#     base_position = read.pos
+#     exon_begin = base_position
+#     for op, nt in read.cigartuples:
+#         if op in match_or_deletion:
+#             base_position += nt
+#         elif op == ref_skip:
+#             if exon_begin < base_position:
+#                 rst.add(Interval(exon_begin, base_position))
+#             
+#             base_position += nt
+#             exon_begin = base_position
+#     if exon_begin < base_position:
+#         rst.add(Interval(exon_begin, base_position))
+#     return rst
+# 
+# def get_interval_tree_overlap(tree1, tree2):
+#     """
+#     Calculate the overlap of two interval trees.
+#     """
+#     tree1_size = sum([x.end-x.begin for x in tree1])
+#     tree2_size = sum([x.end-x.begin for x in tree2])
+#     merge_tree = tree1.union(tree2)
+#     merge_tree.merge_overlaps()
+#     merge_tree_size = sum([x.end-x.begin for x in merge_tree])
+# 
+#     rst = tree1_size+tree2_size-merge_tree_size
+#     return rst
+
+
+
+def get_exon_interval_list(gene_id:str, gene_to_transcript:dict, transcript_to_exon:dict):
+    """
+    gene_id: a row of gene_idx_df
+    """
+    exons = []
+    for transcript in gene_to_transcript[gene_id]:
+        exons.extend(transcript_to_exon[transcript])
+
+    # sort and merge overlapping exons
+    exon_interval_lst = [(start, end) for start, end in exons]
+    exon_interval_lst.sort()
+    merged_lst = []
+
+    exon = exon_interval_lst[0]
+    for i in range(1, len(exon_interval_lst)):
+        if exon_interval_lst[i][0] > exon_interval_lst[i-1][1]:
+            merged_lst.append(exon)
+            exon = exon_interval_lst[i]
+        else:
+            exon = (exon[0], max(exon[1], exon_interval_lst[i][1]))
+    merged_lst.append(exon)
+    return merged_lst
+
+
+def get_read_interval_list(read):
+    """
+    Get the interval tree of the read mapping position.
+    Parameters:
+        read: pysam.AlignedSegment
+    Output:
+        interval_tree: IntervalTree
+    """
+    rst = []
+    match_or_deletion = {0, 2, 7, 8} # only M/=/X (0/7/8) and D (2) are related to genome position
+    ref_skip = 3
+    base_position = read.pos
+    exon_begin = base_position
+    for op, nt in read.cigartuples:
+        if op in match_or_deletion:
+            base_position += nt
+        elif op == ref_skip:
+            if exon_begin < base_position:
+                rst.append((exon_begin, base_position))
+            
+            base_position += nt
+            exon_begin = base_position
+    if exon_begin < base_position:
+        rst.append((exon_begin, base_position))
+    return rst
+
+
+
+def get_interval_list_overlap(sorted_lst1, sorted_lst2):
+    """
+    Calculate the overlap of two sorted list of tuples (length 2)
+    Assuming not overlapping intervals in the same list
+    """
+    overlap = 0
+    pre_range = (-1, 0)
+    i,j = 0,0
+    while i < len(sorted_lst1) and j < len(sorted_lst2):
+        item1 = sorted_lst1[i]
+        item2 = sorted_lst2[j]
+        if item1 <= item2:
+            overlap += max(pre_range[1] - item1[0], 0) - max(pre_range[1] - item1[1], 0)
+            i += 1
+            pre_range = item1
+        else:
+            overlap += max(pre_range[1] - item2[0], 0) - max(pre_range[1] - item2[1], 0)
+            j += 1
+            pre_range = item2
+    while i < len(sorted_lst1):
+        item = sorted_lst1[i]
+        overlap += max(pre_range[1] - item[0], 0) - max(pre_range[1] - item[1], 0)
+        i+=1
+
+    while j < len(sorted_lst2):
+        item = sorted_lst2[j]
+        overlap += max(pre_range[1] - item[0], 0) - max(pre_range[1] - item[1], 0)
+        j += 1
+    return overlap
+
+def merge_sorted_lists(list1, list2):
+    merged_list = []
+    i, j = 0, 0
+    while i < len(list1) and j < len(list2):
+        if list1[i] < list2[j]:
+            merged_list.append(list1[i])
+            i += 1
+        else:
+            merged_list.append(list2[j])
+            j += 1
+    # Append remaining elements from either list
+    merged_list.extend(list1[i:])
+    merged_list.extend(list2[j:])
+    return merged_list
+
+def resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods, random_seed):
+    """
+    Resolve the ambiguous assignment of reads to multiple genes.
+    Steps:
+        1. Iterate through the genes:
+            1. fetch reads mapped to the gene
+            2. for each read, calculate the overlap with the gene exons
+        2. sort the reads by read_id and overlap
+        3. for each read, keep the one with the largest overlap
+    Input: 
+        ambig_df: a dataframe of reads assigned to multiple genes
+        in_bam: bam file path
+        gene_idx_df: a dataframe of gene index
+    Output:
+        recovered_ambig_df: a dataframe of reads assigned to a single gene
+    """
+    gene_list = ambig_df.gene_id.unique()
+    read_id_set = set(ambig_df.read_id.values)
+    # read bam file
+    bam_file = pysam.AlignmentFile(in_bam, "rb")
+    
+
+    # new df construction
+    read_ids = []
+    gene_ids = []
+    overlaps = []
+    for gene in gene_idx_df[gene_idx_df.gene_id.isin(gene_list)].itertuples():
+         # read bam file    
+        reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
+        for read in reads_fetch:
+            if read.is_supplementary or read.is_secondary or read.is_unmapped:
+                continue
+            bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
+            if read_id not in read_id_set:
+                continue
+            read_interval = get_read_interval_list(read)
+            exonic_overlap = get_interval_list_overlap(gene.exon_interval_tree, read_interval)
+            read_ids.append(read_id)
+            gene_ids.append(gene.gene_id)
+            overlaps.append(exonic_overlap)
+        
+    bam_file.close()
+    new_df = pd.DataFrame({"read_id": read_ids, "gene_id": gene_ids, "exonic_overlap": overlaps})
+    # new_df = new_df.sample(frac=1)
+    new_df = pd.merge(ambig_df, new_df, on=['read_id', 'gene_id'], how='inner')
+    # shuffle the dataframe for tie breaking
+    new_df = new_df.sample(frac=1, random_state=random_seed)
+    new_df = new_df.sort_values(by=['read_id', 'exonic_overlap', "overlap"], ascending = [True, False, False])
+    recovered_ambig_df = new_df.drop_duplicates(subset='read_id', keep='first')
+
+    #subset the ambig_df to match the read_id and gene_id columns in new_df
+    #unrecovered_ambig_df = ambig_df[~ambig_df.read_id.isin(recovered_ambig_df.read_id)]
+    #recovered_ambig_df = pd.merge(ambig_df, new_df[['read_id', 'gene_id']], on=['read_id', 'gene_id'], how='inner')
+    return recovered_ambig_df
+    
+
+
+def get_read_to_gene_assignment(in_bam,gene_idx_df,methods, output_r_pos, random_seed):
     """
     Get gene counts from a bam file and a gtf file.
     Input:
         in_bam: bam file path
         gene_idx_df: gtf dataframe returned by parse_gtf_to_df
         methods: demultiplexing methods, 'flexiplex' or 'blaze'
+        output_r_pos: whether to output the mapping position of the read
     Process:
         Step 1: build index 
             chr -> gene -> pos
@@ -61,23 +307,50 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
     chr_names, gene_ids, bcs, umis, read_ids, positions_3prim, \
         positions_5prim, overlaps, read_lengths = [[] for i in range(9)]
     
-    # process genes in the gene_idx_df
+    # if there is only one gene in the gene_idx_df
+    if gene_idx_df.shape[0] == 1 and not output_r_pos:
+        gene = gene_idx_df.iloc[0]
+        reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
+        for read in reads_fetch:
+            if read.is_supplementary or read.is_secondary or read.is_unmapped:
+                continue
+            # get mapped position
+            bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
+            # append to the list
+            bcs.append(bc)
+            umis.append(umi)
+            read_ids.append(read_id)
+            overlaps.append(read.query_alignment_length)
+
+        bam_file.close()
+        read_gene_assign_df = pd.DataFrame({"bc": bcs, "umi": umis, "read_id": read_ids, "overlap" : overlaps})
+        read_gene_assign_df['chr_name'] = gene.chr_name
+        read_gene_assign_df['gene_id'] = gene.gene_id
+        read_gene_assign_df[['pos_5prim', "pos_3prim", "read_length"]] = np.nan
+
+        return read_gene_assign_df
+
+    else:
+        pass    
+
+    # process multiple genes in the gene_idx_df
     for gene in gene_idx_df.itertuples():
         reads_fetch = bam_file.fetch(gene.chr_name, gene.start, gene.end)
         # for each reads, get the reference_name, mapping position, strand
+        n_read = 0
         for read in reads_fetch:
             if read.is_supplementary or read.is_secondary or read.is_unmapped:
                 continue
             # get mapped position
             bc, umi, read_id, strand = flames_read_id_parser(read.query_name,methods)
             
-            # get the overlaps 
+            # get the overlaps and mapping position of the reads
             if read.reference_start >= gene.start and read.reference_end <= gene.end:
                 # when the read is fully mapped within the gene
                 overlaps.append(read.query_alignment_length)
-                if read.is_reverse ^ (strand == '+'):
+                if output_r_pos and read.is_reverse ^ (strand == '+'):
                     pos3, pos5 =read.reference_end, read.reference_start
-                else:
+                elif output_r_pos:
                     pos3, pos5 = read.reference_start, read.reference_end
             else:
                 # when the read is not fully mapped to the gene
@@ -90,22 +363,31 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
                 else:
                     overlaps.append(in_gene_read_end-in_gene_read_start)
                     # get the mapping position of two ends of the reads in gene
-                    if read.is_reverse ^ (strand == '+'):
+                    if output_r_pos and read.is_reverse ^ (strand == '+'):
                         pos3, pos5 = \
                             ref_positions[in_gene_read_end], ref_positions[in_gene_read_start]
-                    else:
+                    elif output_r_pos:
                         pos3, pos5 = \
                             ref_positions[in_gene_read_start], ref_positions[in_gene_read_end]
 
-            # append to the list
-            positions_5prim.append(pos5)
-            positions_3prim.append(pos3)
+            # for each alignment
+            n_read += 1
+            if output_r_pos:
+                positions_5prim.append(pos5)
+                positions_3prim.append(pos3)
             read_lengths.append(read.reference_end-read.reference_start)
             bcs.append(bc)
             umis.append(umi)
             read_ids.append(read_id)
-            chr_names.append(gene.chr_name)
-            gene_ids.append(gene.gene_id)
+            
+        
+        # for each gene
+        if not output_r_pos:
+            positions_5prim.extend([np.nan]*n_read)
+            positions_3prim.extend([np.nan]*n_read)
+        chr_names.extend([gene.chr_name]*n_read)
+        gene_ids.extend([gene.gene_id]*n_read)
+    
     read_gene_assign_df = pd.DataFrame({"chr_name": chr_names, "gene_id": gene_ids,
                                         "bc": bcs, "umi": umis, "read_id": read_ids,
                                         "pos_5prim": positions_5prim, "pos_3prim": positions_3prim,
@@ -117,36 +399,19 @@ def get_read_to_gene_assignment(in_bam, gene_idx_df, methods):
     read_gene_assign_df.drop_duplicates(subset=['gene_id', 'read_id'], inplace=True)
     # get the unambiguous read to gene assignment
     dup_mask = read_gene_assign_df.duplicated(subset='read_id', keep = False)
-    unambig_df = read_gene_assign_df[~dup_mask]
+    if dup_mask.sum():
+        unambig_df = read_gene_assign_df[~dup_mask]
+        ambig_df = read_gene_assign_df[dup_mask]
+
     # resolve the read assigned to multipe genes
-    ambig_df = read_gene_assign_df[dup_mask].sort_values(
-        by=['read_id','overlap'], ascending = [True, False])
-    
-    # for the read assigned to multiple genes, keep the one with the largest overlap
-    pre_id, pre_overlap, pre_idx = None, None, None
-    row_idx_to_drop = []
-    for read in ambig_df.itertuples():
-        if read.read_id != pre_id:
-            pre_id, pre_overlap, pre_idx = \
-                read.read_id, read.overlap, read.Index
-        elif read.overlap < pre_overlap:
-            row_idx_to_drop.append(read.Index)
-        elif read.overlap == pre_overlap:
-            row_idx_to_drop.append(read.Index)
-            row_idx_to_drop.append(pre_idx)
-            
-    recovered_ambig_df = ambig_df.drop(row_idx_to_drop)
-    ## merge the unambiguous and ambiguous read to gene assignment
-    read_gene_assign_df = pd.concat([unambig_df, recovered_ambig_df])
-
-
-    ## sort the read_gene_assign_df
+        recovered_ambig_df = resolve_ambiguous_assignment_by_exonic_coverage(ambig_df, in_bam, gene_idx_df, methods, random_seed=random_seed)
+        read_gene_assign_df = pd.concat([unambig_df, recovered_ambig_df])
     read_gene_assign_df.sort_values(by=['chr_name', 'bc', 'gene_id', 'pos_3prim'], inplace=True)
     read_gene_assign_df[['chr_name', 'bc', 'gene_id']] =\
           read_gene_assign_df[['chr_name','bc', 'gene_id']].astype('category')
 
     # check if there are remaining reads assigned to multiple genes
-    dup_mask = recovered_ambig_df.duplicated(subset='read_id', keep = False)
+    dup_mask = read_gene_assign_df.duplicated(subset='read_id', keep = False)
     if dup_mask.sum():
         warning_msg(f"Warning: {dup_mask.sum()} reads are assigned to multiple \
         genes. Please check the output file for details.")
@@ -174,7 +439,7 @@ def flames_read_id_parser(read_id, methods = 'flexiplex'):
     else:
         sys.exit("Please specify the correct methods: 'flexiplex' or 'blaze'")
 
-def quantify_gene(in_bam, in_gtf, n_process):
+def quantify_gene(in_bam, in_gtf, n_process, random_seed=2024):
     """A multi-process wrapper of quantify_gene_single_process 
        Processing strategy:
         1. split the gtf file by chromosome
@@ -213,7 +478,8 @@ def quantify_gene(in_bam, in_gtf, n_process):
                             preserve_order = False,
                             n_process=n_process, 
                             in_bam=in_bam, 
-                            demulti_methods=demulti_methods):
+                            demulti_methods=demulti_methods,
+                            random_seed=random_seed):
         
         gene_count_mat, dedup_read_lst_sub, umi_list_sub = future.result()
         gene_count_mat_dfs.append(gene_count_mat)
@@ -227,7 +493,7 @@ def quantify_gene(in_bam, in_gtf, n_process):
     
     return gene_count_mat, dedup_read_lst, umi_lst
 
-def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3prim = False, verbose=False):
+def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3prim = False, verbose=False, random_seed=2024):
     """
     Get gene counts from a bam file and a gtf file.
     Input:
@@ -241,8 +507,12 @@ def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3pr
         umi_lst: a list of umi (not deduplicated, in the form of bc+umi+cluster)
     """
 
-    read_gene_assign_df = \
-        get_read_to_gene_assignment(in_bam, in_gtf_df, methods=demulti_methods)
+    read_gene_assign_df =  get_read_to_gene_assignment(
+                            in_bam, 
+                            in_gtf_df, 
+                            methods=demulti_methods, 
+                            output_r_pos=cluster_3prim,
+                            random_seed = random_seed) # do not output read position when cluster_3prim is False
 
     # cluster reads with similar genome location (polyT side mapping position)
     if verbose:
@@ -261,7 +531,6 @@ def quantify_gene_single_process(in_gtf_df, in_bam, demulti_methods, cluster_3pr
     if verbose:
         print("Correcting UMIs ...")
     
-
     read_gene_assign_df['umi_corrected'] = \
         read_gene_assign_df.groupby(['bc','gene_id','cluster'], observed=True)['umi']\
                            .transform(_umi_correction)
@@ -475,7 +744,7 @@ def subset_reads_from_fastq(in_fastq, out_fastq, read_id_lst,
 # this is the main function
 def quantification(annotation, outdir, pipeline, 
                   n_process=12, saturation_curve=True,
-                  infq=None,  sample_names=None, **kwargs):
+                  infq=None,  sample_names=None, random_seed=2024, **kwargs):
     if pipeline == "sc_single_sample":
         if not infq:
             infq = os.path.join(outdir, "matched_reads.fastq")
@@ -485,7 +754,7 @@ def quantification(annotation, outdir, pipeline,
         out_fastq = os.path.join(outdir, "matched_reads_dedup.fastq")
 
         gene_count_mat, dedup_read_lst, umi_lst = \
-                                quantify_gene(in_bam, annotation, n_process)
+                                quantify_gene(in_bam, annotation, n_process, random_seed=random_seed)
 
         gene_count_mat.to_csv(out_csv)
 
@@ -516,7 +785,7 @@ def quantification(annotation, outdir, pipeline,
             #out_read_lst = os.path.join(outdir, sample+ "_"+"deduplicated_read_id.txt")
             
             gene_count_mat, dedup_read_lst, umi_lst = \
-                                    quantify_gene(sample_bam, annotation, n_process)
+                                    quantify_gene(sample_bam, annotation, n_process, random_seed=random_seed)
 
             #pd.DataFrame({'umi':umi_lst}).to_csv(f"{outdir}/{sample}_umi_lst.csv")
 

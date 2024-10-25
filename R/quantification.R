@@ -24,12 +24,14 @@ parse_realigned_bam <- function(bam_in, fa_idx_f, min_sup_reads,
 #' @importFrom reticulate import_from_path
 #' @importFrom basilisk basiliskRun
 #' @importFrom future plan
-wrt_tr_to_csv <- function(bc_tr_count_dict, transcript_dict, csv_f,
+wrt_tr_to_csv <- function(
+    bc_tr_count_dict, transcript_dict, csv_f,
     transcript_dict_ref = NULL, has_UMI = TRUE) {
   future::plan(future::multisession)
-  basiliskRun(env = flames_env,
+  basiliskRun(
+    env = flames_env,
     fun = function(bc_tr_count_dict, transcript_dict,
-        csv_f, transcript_dict_ref, has_UMI) {
+                   csv_f, transcript_dict_ref, has_UMI) {
       python_path <- system.file("python", package = "FLAMES")
       count <- reticulate::import_from_path("count_tr", python_path)
       count$wrt_tr_to_csv(bc_tr_count_dict, transcript_dict, csv_f, transcript_dict_ref, has_UMI)
@@ -45,11 +47,13 @@ wrt_tr_to_csv <- function(bc_tr_count_dict, transcript_dict, csv_f,
 #'
 #' @details
 #' After the genome alignment step (\code{do_genome_align}), the alignment file will be parsed to
-#' generate the per gene UMI count matrix. For each gene in the annotation file, the number of
-#' reads whose mapped ranges overlap with the gene's genome coordinates will be assigned to the
-#' gene. For reads can be assigned to multiple gene, the read will be assigned to the gene with
-#' the highest number of overlapping nucleotides. If the read can be assigned to multiple genes
-#' with the same number of overlapping nucleotides, the read will be not be assigned.
+#' generate the per gene UMI count matrix. For each gene in the annotation file, the number of reads 
+#' overlapping with the gene’s genomic coordinates will be assigned to that gene. If a read overlaps 
+#' multiple genes, it will be assigned to the gene with the highest number of overlapping nucleotides.
+#' If exon coordinates are included in the provided annotation, the decision will first consider the 
+#' number of nucleotides aligned to the exons of each gene. In cases of a tie, the overlap with introns 
+#' will be used as a tiebreaker. If there is still a tie after considering both exons and introns, 
+#' a random gene will be selected from the tied candidates.
 #'
 #' After the read-to-gene assignment, the per gene UMI count matrix will be generated.
 #' Specifically, for each gene, the reads with similar mapping coordinates of transcript
@@ -67,10 +71,11 @@ wrt_tr_to_csv <- function(bc_tr_count_dict, transcript_dict, csv_f,
 #' @param samples A vector of sample names, default to the file names of input fastq files,
 #' or folder names if \code{fastqs} is a vector of folders.
 #' \code{bulk} (bulk, single or multi-sample), or \code{sc_multi_sample} (single-cell, multiple samples)
+#' @param random_seed The random seed for reproducibility.
 #' @return The count matrix will be saved in the output folder as \code{transcript_count.csv.gz}.
 #' @importFrom reticulate import_from_path dict
 #' @importFrom basilisk basiliskRun
-quantify_gene <- function(annotation, outdir, infq, n_process, pipeline = "sc_single_sample", samples = NULL) {
+quantify_gene <- function(annotation, outdir, infq, n_process, pipeline = "sc_single_sample", samples = NULL, random_seed = 2024) {
   cat(format(Sys.time(), "%X %a %b %d %Y"), "quantify genes \n")
 
   if (grepl("\\.gff3?(\\.gz)?$", annotation)) {
@@ -88,24 +93,31 @@ quantify_gene <- function(annotation, outdir, infq, n_process, pipeline = "sc_si
   tryCatch(
     {
       basiliskRun(
-        env = flames_env, fun = function(annotation, outdir, pipeline, n_process, infq, samples) {
+        env = flames_env, fun = function(annotation, outdir, pipeline, n_process, infq, samples, random_seed) {
           python_path <- system.file("python", package = "FLAMES")
           count <- reticulate::import_from_path("count_gene", python_path)
-          count$quantification(annotation, outdir, pipeline, n_process, infq = infq, sample_names = samples)
+          count$quantification(annotation, outdir, pipeline, n_process, infq = infq, sample_names = samples, random_seed = random_seed)
         },
         annotation = annotation,
         outdir = outdir,
         pipeline = pipeline,
         n_process = n_process,
         infq = infq,
-        samples = samples
+        samples = samples,
+        random_seed = random_seed
       )
     },
     error = function(e) {
       # Capture the Python error using py_last_error()
       py_error <- reticulate::py_last_error()
-      py_error_message <- py_error$message
-      stop("Error when quantifying genes:\n", py_error_message)
+      if (!is.null(py_error)) {
+        py_error_message <- py_error$message
+        # Print the actual function call
+        cat(annotation, outdir, pipeline, n_process, infq, samples, random_seed)
+        stop("Error when quantifying genes:\n", py_error_message)
+      } else {
+        stop("Error when quantifying genes:\n", e$message)
+      }
     }
   )
 }
