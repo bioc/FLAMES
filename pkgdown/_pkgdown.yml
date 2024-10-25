@@ -36,10 +36,11 @@ reference:
       - quantify_gene
       - quantify_transcript
       - quantify_transcript_flames
-  - title: Mutation calling
+  - title: Mutation analysis
     contents:
       - find_variants
       - sc_mutations
+      - relative_mutation_positions
   - title: Visualization
     contents:
       - plot_coverage

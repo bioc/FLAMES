@@ -414,3 +414,211 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
 
   return(variants)
 }
+
+#' Relative mutation positions within the gene body
+#'
+#' Given a set of mutations and a gene annotation, calculate the relative position of each mutation
+#' within the gene body. The gene annotation must have the following types: "gene" and "exon".
+#' The gene annotation must be for one gene only. The mutations must be within the gene region.
+#' The function will merge overlapping exons and calculate the relative position of each mutation
+#' within the gene body, excluding intronic regions.
+#'
+#' @importFrom GenomicRanges GRanges findOverlaps reduce
+#' @importFrom IRanges IRanges start end width
+#' @importFrom S4Vectors mcols queryHits subjectHits
+#' @importFrom magrittr equals
+#' @importFrom BiocGenerics strand
+#'
+#' @param mutations either the tibble output from \code{find_variants} or a GRanges object.
+#' Make sure to filter it for only the gene of interest.
+#' @param annotation_grange GRanges: the gene annotation. Must have the following types: "gene" and "exon".
+#' @param verbose logical(1): whether to print messages.
+#' @return A numeric vector of relative positions of each mutation within the gene body. Ranging from
+#' 0 (start of the gene) to 1 (end of the gene).
+relative_mutation_positions_single <- function(mutations, annotation_grange, verbose = TRUE) {
+
+  if (is.data.frame(mutations)) {
+    # verify that all mutations are in the same gene
+    if (!length(unique(mutations$region)) == 1) {
+      errMsg <- sprintf(
+        "Incorrent number of unique values in `mutations` for column `region`: %s",
+        paste0(unique(mutations$region), collapse = ", ")
+      )
+      stop(errMsg)
+  }
+   
+    # convert to GRanges of mutations 
+    mutations <- GenomicRanges::GRanges(
+      seqnames = mutations$seqnames,
+      ranges = IRanges::IRanges(start = mutations$pos, end = mutations$pos)
+    )
+  } else {
+    stopifnot("muations must be either a GRanges or a data.frame object" = is(mutations, "GRanges"))
+  }
+
+  # verify that the gene annotation is for one gene only
+  if (!length(unique(S4Vectors::mcols(annotation_grange)$gene_id)) == 1) {
+    errMsg <- sprintf(
+      "Incorrent number of gene_id(s) in `annotation_grange`: %s",
+      paste0(unique(S4Vectors::mcols(annotation_grange)$gene_id), collapse = ", ")
+    )
+    stop(errMsg)
+  }
+
+  # verify that all mutations are within the gene region
+  mutations_ok <- GenomicRanges::findOverlaps(
+    mutations,
+    subset(annotation_grange, type == "gene")
+  ) |>
+    S4Vectors::queryHits() |>
+    length() |>
+    magrittr::equals(length(mutations))
+  if (!mutations_ok) {
+    stop("Some mutations are not within the gene region")
+  }
+
+  # merge overlapping exons
+  merged_exons <- annotation_grange |>
+    subset(type == "exon") |>
+    GenomicRanges::reduce()
+
+  overlaps <- GenomicRanges::findOverlaps(mutations, merged_exons)
+  mutations_in_exons <- mutations[S4Vectors::queryHits(overlaps)]
+  if (verbose) {
+    message(
+      sprintf(
+        "Found %d mutations in exons out of at total of %d mutations in %s",
+        length(mutations_in_exons), length(mutations),
+        unique(S4Vectors::mcols(annotation_grange)$gene_name)
+      )
+    )
+  }
+  # no mutations in exons
+  if (length(mutations_in_exons) == 0) {
+    return(numeric(0))
+  }
+
+  cumulative_exon_lengths <- cumsum(IRanges::width(merged_exons))
+
+  positions <-
+    mapply(
+      function(mutation_id, exon_idx) {
+        mutation <- mutations_in_exons[mutation_id]
+        exon_end <- IRanges::end(merged_exons[exon_idx])
+        exon_cumulative_length <- cumulative_exon_lengths[exon_idx]
+        relative_position <- (exon_cumulative_length - exon_end + IRanges::start(mutation)) /
+          sum(IRanges::width(merged_exons))
+        return(relative_position)
+      },
+      mutation_id = seq_along(mutations_in_exons), exon_idx = S4Vectors::subjectHits(overlaps),
+      SIMPLIFY = TRUE
+    )
+
+  # flip the positions if the gene is on the negative strand
+  flip <- subset(annotation_grange, type == "gene") |>
+    BiocGenerics::strand() |>
+    as.character() |>
+    magrittr::equals("-")
+  if (flip) {
+    positions <- 1 - positions
+  }
+
+  return(positions)
+}
+
+#' Relative mutation positions within the gene body
+#'
+#' Given a set of mutations and gene annotation, calculate the relative position of each mutation
+#' within the gene body they are in.
+#'
+#' @param mutations either the tibble output from \code{find_variants}. It must have columns \code{seqnames},
+#' \code{pos}, and a third column for specifying the gene id or gene name. The mutation must be within the gene region.
+#' @param annotation Either path to the annotation file (GTF/GFF) or a GRanges object of the gene annotation.
+#' @param bin logical(1): whether to bin the relative positions into 100 bins.
+#' @param by character(1): the column name in the annotation to match with the gene annotation.
+#' E.g. \code{c("region" = "gene_name")} to match the `region` column in the mutations with the
+#' `gene_name` column in the annotation.
+#' @param threads integer(1): number of threads to use.
+#' @return If \code{bin = FALSE}, a list of numeric vectors of relative positions of each mutation within the gene body.
+#' If \code{bin = TRUE}, a numeric vector of length 100 of the number of mutations in each bin.
+#' @examples
+#' outdir <- tempfile()
+#' dir.create(outdir)
+#' genome_fa <- system.file("extdata", "rps24.fa.gz", package = "FLAMES")
+#' minimap2_align( # align to genome
+#'   config = jsonlite::fromJSON(
+#'     system.file("extdata", "config_sclr_nanopore_3end.json", package = "FLAMES")),
+#'   fa_file = genome_fa,
+#'   fq_in = system.file("extdata", "fastq", "demultiplexed.fq.gz", package = "FLAMES"),
+#'   annot = system.file("extdata", "rps24.gtf.gz", package = "FLAMES"),
+#'   outdir = outdir
+#' )
+#' variants <- find_variants(
+#'   bam_path = file.path(outdir, "align2genome.bam"),
+#'   reference = genome_fa,
+#'   annotation = system.file("extdata", "rps24.gtf.gz", package = "FLAMES"),
+#'   min_nucleotide_depth = 4
+#' )
+#' positions <- 
+#'  relative_mutation_positions(
+#'    mutations = variants,
+#'    annotation = system.file("extdata", "rps24.gtf.gz", package = "FLAMES")
+#'  )
+#' @importFrom rtracklayer import
+#' @importFrom dplyr mutate filter
+#' @importFrom BiocParallel MulticoreParam bplapply
+#' @importFrom S4Vectors mcols
+#' @export
+relative_mutation_positions <- function(mutations, annotation, bin = FALSE, by = c("region" = "gene_name"), threads = 1){
+  if (!length(by) == 1) {
+    stop("by must be a character vector of length 1")
+  }
+  if (is.null(names(by))) {
+    names(by) <- by
+  }
+
+  if (is.character(annotation)) {
+    message(paste0(format(Sys.time(), "%H:%M:%S "), "Reading annotation ..."))
+    annotation_grange <- rtracklayer::import(annotation)
+  } else {
+    annotation_grange <- annotation
+  }
+
+  mutations <- mutations |> 
+    dplyr::mutate(region = mutations[, names(by)]) |>
+    dplyr::filter(!is.na(region))
+  mutations_split <- split(mutations, mutations$region)
+
+  coverages <- tryCatch({
+    BiocParallel::bplapply(
+      names(mutations_split),
+      function(x) {
+        annot_i <- subset(annotation_grange, S4Vectors::mcols(annotation_grange)[, by] == x)
+        pos <- relative_mutation_positions_single(mutations_split[[x]], annot_i, verbose = FALSE)
+        if (!bin) {
+          return(pos)
+        }
+        pos <- round(pos * 100)
+        coverage <- sapply(1:100, function(i) sum(pos == i))
+        return(coverage)
+      },
+      BPPARAM = BiocParallel::MulticoreParam(
+        workers = threads, stop.on.error = TRUE, progressbar = TRUE
+      )
+    )
+  }, error = identity)
+  if (inherits(coverages, "error")) {
+    warning("Error occurred in `mutations_coverage`, returning error object")
+    return(coverages)
+  }
+
+  if (!bin) {
+    names(coverages) <- names(mutations_split)
+    return(coverages)
+  }
+
+  # sum up all coverages
+  total_coverage <- do.call(rbind, coverages) |>
+    colSums()
+  return(total_coverage)
+}
