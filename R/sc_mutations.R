@@ -272,9 +272,9 @@ find_variants_grange <- function(bam_path, reference, gene_grange, min_nucleotid
 #'
 #' @importFrom Biostrings readDNAStringSet
 #' @importFrom rtracklayer import
-#' @importFrom S4Vectors mcols
+#' @importFrom S4Vectors mcols mcols<- DataFrame
 #' @importFrom GenomeInfoDb seqnames seqlengths seqinfo
-#' @importFrom GenomicRanges gaps
+#' @importFrom GenomicRanges disjoin gaps
 #' @importFrom BiocParallel bplapply bpmapply MulticoreParam
 #' @importFrom dplyr bind_rows mutate
 #'
@@ -339,6 +339,29 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
       (\(x) x[S4Vectors::mcols(x)$type == "gene", ])()
   }
 
+  message("Merging overlapping genes ...")
+  S4Vectors::mcols(annotation) <- S4Vectors::mcols(annotation)[, names_from, drop = FALSE]
+  disjoint_annotation <- GenomicRanges::disjoin(annotation,
+    ignore.strand=TRUE, with.revmap=TRUE
+  )
+  merge_mcol <- function(revmap, mcol) {
+    sapply(revmap, function(x) {
+      if (length(x) == 1) {
+        return(mcol[x])
+      } else {
+        return(paste0(mcol[x], collapse = ", "))
+      }
+    })
+  }
+  message(sprintf("%d overlapping regions, their %s(s) are merged with `, ` as separator",
+    sum(sapply(S4Vectors::mcols(disjoint_annotation)$revmap, length) > 1), names_from
+  ))
+  S4Vectors::mcols(disjoint_annotation) <- S4Vectors::mcols(disjoint_annotation)$revmap |>
+    merge_mcol(S4Vectors::mcols(annotation)[, names_from]) |>
+    S4Vectors::DataFrame() |>
+    setNames(names_from)
+  annotation <- disjoint_annotation
+
   if (!annotated_region_only) {
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Adding unannotated gaps ..."))
     # parsed annotation might not have seqlengths in seqinfo
@@ -350,9 +373,9 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
       reference[GenomeInfoDb::seqnames(GenomeInfoDb::seqinfo(annotation))] |>
       Biostrings::seqinfo()
     if (any(is.na(GenomeInfoDb::seqlengths(annotation)))) {
-      stop("Missing seqlengths in seqinfo of annotation")
+      stop("Missing seqlengths in seqinfo of annotation, cannot add unannotated gaps")
     }
-    annotation <- c(annotation, GenomicRanges::gaps(annotation))
+    annotation <- c(annotation, GenomicRanges::gaps(annotation, ignore.strand = TRUE))
   }
 
   if (length(bam_path) == 1) {
