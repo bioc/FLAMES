@@ -28,7 +28,7 @@ flexiplex <- function(reads_in, barcodes_file, bc_as_readid, max_bc_editdistance
     .Call(`_FLAMES_flexiplex`, reads_in, barcodes_file, bc_as_readid, max_bc_editdistance, max_flank_editdistance, pattern, reads_out, stats_out, bc_out, reverseCompliment, n_threads)
 }
 
-variant_count_matrix <- function(bam_path, seqname, pos, indel, barcodes, verbose) {
-    .Call(`_FLAMES_variant_count_matrix`, bam_path, seqname, pos, indel, barcodes, verbose)
+variant_count_matrix <- function(bam_path, seqname, pos, indel, verbose) {
+    .Call(`_FLAMES_variant_count_matrix`, bam_path, seqname, pos, indel, verbose)
 }
 

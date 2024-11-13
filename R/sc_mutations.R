@@ -2,13 +2,13 @@
 #' @importFrom tidyr pivot_longer
 #' @importFrom tidyselect matches
 #' @importFrom dplyr group_by mutate ungroup
-variant_count_tb <- function(bam_path, seqname, pos, indel, barcodes, verbose = TRUE) {
+variant_count_tb <- function(bam_path, seqname, pos, indel, verbose = TRUE) {
   # allele by barcode matrix (value: read count)
   tryCatch(
     {
       variant_count_matrix( # throws Rcpp::exception when no reads at pos
         bam_path = bam_path,
-        seqname = seqname, pos = pos, indel = indel, barcodes = barcodes, verbose = verbose
+        seqname = seqname, pos = pos, indel = indel, verbose = verbose
       ) |>
         tibble::as_tibble(rownames = "allele") |>
         # pivot to long format: allele, barcode, allele_count

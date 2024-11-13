@@ -68,7 +68,7 @@ Rcpp::IntegerVector flexiplex(Rcpp::StringVector reads_in, Rcpp::String barcodes
 // [[Rcpp::export]]
 Rcpp::NumericMatrix
 variant_count_matrix(Rcpp::String bam_path, Rcpp::String seqname, int pos,
-                     bool indel, Rcpp::StringVector barcodes, bool verbose) {
-  return variant_count_matrix_cpp(bam_path, seqname, pos, indel, barcodes,
+                     bool indel, bool verbose) {
+  return variant_count_matrix_cpp(bam_path, seqname, pos, indel,
                                   verbose);
 }
