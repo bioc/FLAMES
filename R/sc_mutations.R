@@ -6,12 +6,17 @@ variant_count_tb <- function(bam_path, seqname, pos, indel, verbose = TRUE) {
   # allele by barcode matrix (value: read count)
   tryCatch(
     {
-      variant_count_matrix( # throws Rcpp::exception when no reads at pos
+      tb <- variant_count_matrix( # throws Rcpp::exception when no reads at pos
         bam_path = bam_path,
         seqname = seqname, pos = pos, indel = indel, verbose = verbose
       ) |>
-        tibble::as_tibble(rownames = "allele") |>
+        tibble::as_tibble(rownames = "allele")
+      if (ncol(tb) <= 1) { # no cols besides "allele"
+        message(sprintf("No reads found at %s:%d in %s (All RefSkips)", seqname, pos, bam_path))
+        return(tibble::tibble())
+      }
         # pivot to long format: allele, barcode, allele_count
+      tb |>
         tidyr::pivot_longer(
           cols = -tidyselect::matches("allele"),
           values_to = "allele_count", names_to = "barcode"
@@ -48,9 +53,6 @@ variant_count_tb <- function(bam_path, seqname, pos, indel, verbose = TRUE) {
 #' @param seqnames character(n): chromosome names of the postions to count alleles.
 #' @param positions integer(n): positions, 1-based, same length as seqnames. The positions to count alleles.
 #' @param indel logical(1): whether to count indels (TRUE) or SNPs (FALSE).
-#' @param barcodes character(n) when bam_path is a single file, or list of character(n)
-#' when bam_path is a list of files paths. The cell barcodes to count alleles for.
-#' Only reads with these barcodes will be counted.
 #' @param threads integer(1): number of threads to use. Maximum number of threads is
 #' the number of bam files * number of positions.
 #' @return A tibble with columns: allele, barcode, allele_count, cell_total_reads, pct, pos, seqname.
@@ -75,10 +77,7 @@ variant_count_tb <- function(bam_path, seqname, pos, indel, verbose = TRUE) {
 #'   bam_path = file.path(outdir, "align2genome.bam"),
 #'   seqnames = c("chr14", "chr14"),
 #'   positions = c(1260, 2714), # positions of interest
-#'   indel = FALSE,
-#'   barcodes = read.delim(
-#'     system.file("extdata", "bc_allow.tsv.gz", package = "FLAMES"),
-#'     header = FALSE)$V1
+#'   indel = FALSE
 #' )
 #' head(snps_tb)
 #' snps_tb |>
@@ -86,7 +85,7 @@ variant_count_tb <- function(bam_path, seqname, pos, indel, verbose = TRUE) {
 #'   dplyr::group_by(allele) |>
 #'   dplyr::summarise(count = sum(allele_count)) # should be identical to samtools pileup
 #' @export
-sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes, threads = 1) {
+sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, threads = 1) {
   stopifnot(
     "seqnames not the same length as positions" =
       length(seqnames) == length(positions)
@@ -94,15 +93,11 @@ sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes,
 
   if (length(bam_path) == 1) {
     # single bam file, parallelize over positions
-    stopifnot(
-      "barcodes must be a character vector" =
-        is.character(barcodes)
-    )
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Got 1 bam file, parallelizing over each position ..."))
     variants <- tryCatch({
       BiocParallel::bpmapply(
         function(seqname, pos) {
-          variant_count_tb(bam_path, seqname, pos, indel, barcodes, verbose = FALSE)
+          variant_count_tb(bam_path, seqname, pos, indel, verbose = FALSE)
         },
         seqname = seqnames, pos = positions, SIMPLIFY = FALSE,
         BPPARAM = BiocParallel::MulticoreParam(
@@ -112,10 +107,6 @@ sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes,
     }, error = identity)
   } else {
     # multiple bam files, parallelize over bam files
-    stopifnot(
-      "barcodes must be a list of character vectors, same length as bam_path" =
-        is.list(barcodes) & length(barcodes) == length(bam_path)
-    )
     # data frame of all combinations between (seqname, pos) and (bam_path, barcodes)
     args_grid <- expand.grid(
       mutation_index = seq_along(positions),
@@ -125,21 +116,20 @@ sc_mutations <- function(bam_path, seqnames, positions, indel = FALSE, barcodes,
       dplyr::mutate(
         seqname = seqnames[mutation_index],
         pos = positions[mutation_index],
-        sample_bam = bam_path[bam_index],
-        sample_barcodes = barcodes[bam_index]
+        sample_bam = bam_path[bam_index]
       ) |>
       dplyr::select(-mutation_index, -bam_index)
 
     message(paste0(format(Sys.time(), "%H:%M:%S "), "Multi-threading over bam files x positions ..."))
     variants <- tryCatch({
       BiocParallel::bpmapply(
-        function(sample_bam, seqname, pos, sample_barcodes) {
-          variant_count_tb(sample_bam, seqname, pos, indel, sample_barcodes, verbose = FALSE) |>
+        function(sample_bam, seqname, pos) {
+          variant_count_tb(sample_bam, seqname, pos, indel, verbose = FALSE) |>
             dplyr::mutate(bam_file = sample_bam)
         },
         sample_bam = args_grid$sample_bam, seqname = args_grid$seqname,
-        pos = args_grid$pos, sample_barcodes = args_grid$sample_barcodes,
-        SIMPLIFY = FALSE, BPPARAM = BiocParallel::MulticoreParam(
+        pos = args_grid$pos, SIMPLIFY = FALSE, 
+        BPPARAM = BiocParallel::MulticoreParam(
           workers = threads, stop.on.error = TRUE, progressbar = TRUE
         )
       )

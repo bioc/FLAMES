@@ -8,11 +8,164 @@
 #include <unistd.h>
 #include <unordered_map>
 #include <vector>
-#include "./flexiplex.h"
 // [[Rcpp::plugins(cpp17)]]
+
+// x <- FLAMES:::variant_count_tb(
+//   bam_path =
+//   '/vast/scratch/users/wang.ch/RaCHseq_sup_fastq/FLAMES_out/sample15_align2genome_filtered.bam',
+//   seqname = 'chr21', pos = 34880579, indel = F, verbose = F)
 
 const std::vector<char> BASES = {'A', 'T', 'C', 'G', '-'};
 constexpr int BASES_SIZE = 5;
+constexpr int MAX_EDIT_DISTANCE = 3;
+
+// Code for fast edit distance calculation for short sequences modified from
+// https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#C++
+// s2 is always assumned to be the shorter string (barcode)
+bool within_edit_dist(const std::string &s1, const std::string &s2) {
+
+  const std::string_view s1_view(s1);
+  const std::string_view s2_view(s2);
+
+  const std::size_t len1 = s1_view.size() + 1;
+  const std::size_t len2 = s2_view.size() + 1;
+
+  std::vector<unsigned int> dist_holder(len1 * len2);
+  // initialise the edit distance matrix.
+  // penalise for gaps at the start and end of the shorter sequence (j)
+  // but not for shifting the start/end of the longer sequence (i,0)
+  dist_holder[0] = 0; //[0][0]
+  for (std::size_t j = 1; j < len2; ++j)
+    dist_holder[j] = j; //[0][j];
+  for (std::size_t i = 1; i < len1; ++i)
+    dist_holder[i * len2] = 0; //[i][0];
+
+  unsigned int best = len2;
+
+  // loop over the distance matrix elements and calculate running distance
+  for (std::size_t j = 1; j < len2; ++j) {
+    bool any_below_threshold = false; // flag used for early exit
+    for (std::size_t i = 1; i < len1; ++i) {
+      unsigned int sub =
+          (s1_view[i - 1] == s2_view[j - 1]) ? 0 : 1; // match / mismatch score
+
+      const unsigned int &top_left = dist_holder[(i - 1) * len2 + (j - 1)];
+      const unsigned int &left = dist_holder[i * len2 + (j - 1)];
+      const unsigned int &top = dist_holder[(i - 1) * len2 + j];
+
+      unsigned int min_value = std::min({top + 1, left + 1, top_left + sub});
+      dist_holder[i * len2 + j] = min_value;
+
+      if (min_value <= MAX_EDIT_DISTANCE)
+        any_below_threshold = true;
+      if (j == (len2 - 1) && min_value < best) {
+        // if this is the last row in j
+        // check if this is the best running score
+        best = min_value;
+        if (best <= MAX_EDIT_DISTANCE) {
+          return true;
+        }
+      }
+    }
+    if (!any_below_threshold) { // early exit to save time.
+      return false;
+    }
+  }
+  return best <= MAX_EDIT_DISTANCE;
+}
+
+// barcode -> UMI -> array of allele counts (A, T, C, G, -)
+using SNPTable = std::unordered_map<
+    std::string,
+    std::unordered_map<std::string, std::array<unsigned int, BASES_SIZE>>>;
+
+// barcode -> UMI -> variant -> count
+using IndelTable = std::unordered_map<
+    std::string,
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, unsigned int>>>;
+
+// for each barcode, group UMIs within a certain edit distance
+// only compare each UMI to the first UMI in the group
+template <typename TableType>
+std::unordered_map<std::string, std::vector<std::vector<std::string>>>
+group_umis(const TableType &table, int max_distance) {
+
+  std::unordered_map<std::string, std::vector<std::vector<std::string>>>
+      grouped_umis;
+  unsigned int end;
+
+  for (const auto &barcode :
+       table) { // first: barcode, second: UMI unordered_map
+    for (const auto &umi : barcode.second) { // first: UMI, second: SNP / indel
+      // first time seeing this barcode
+      if (grouped_umis.find(barcode.first) == grouped_umis.end()) {
+        grouped_umis[barcode.first].push_back({umi.first});
+        continue;
+      }
+      // if UMI matches with any eixsting group's first UMI, add to the group
+      bool added = false;
+      for (auto &group : grouped_umis[barcode.first]) {
+        if (within_edit_dist(umi.first, group[0])) {
+          group.push_back(umi.first);
+          added = true;
+          break;
+        }
+      }
+      // start a new group if no match with any existing group
+      if (!added) {
+        grouped_umis[barcode.first].push_back({umi.first});
+      }
+    }
+  }
+
+  return grouped_umis;
+}
+
+unsigned int grouped_umi_voting_snp(
+    const std::vector<std::string> &umis,
+    const std::unordered_map<std::string, std::array<unsigned int, BASES_SIZE>>
+        &subtable) {
+  // sum up the array of 5 for all umis
+  std::array<unsigned int, BASES_SIZE> umi_sum = {0};
+  for (const auto &umi : umis) {
+    for (int i = 0; i < BASES_SIZE; i++) {
+      umi_sum[i] += subtable.at(umi)[i];
+    }
+  }
+
+  // find the index of the max element and return
+  // TODO: what if there are multiple max elements?
+  return std::distance(umi_sum.begin(),
+                       std::max_element(umi_sum.begin(), umi_sum.end()));
+}
+
+unsigned int grouped_umi_voting_indel(
+    const std::vector<std::string> &umis,
+    const std::unordered_map<std::string,
+                             std::unordered_map<std::string, unsigned int>>
+        subtable,
+    const std::unordered_set<std::string> &indel_keys) {
+
+  // sum up counts to an unordered_map
+  std::unordered_map<std::string, unsigned int> umi_sum;
+  for (const auto &umi : umis) {
+    for (const auto &indel : subtable.at(umi)) {
+      umi_sum[indel.first] += indel.second;
+    }
+  }
+
+  // find the index of the max element and return
+  std::string max_key = "."; // should not matter
+  unsigned int max_val = 0;
+  for (const auto &indel : umi_sum) {
+    if (indel.second > max_val) {
+      max_val = indel.second;
+      max_key = indel.first;
+    }
+  }
+  return std::distance(indel_keys.begin(), indel_keys.find(max_key));
+}
 
 typedef struct plpconf {
   const char *inname;
@@ -57,8 +210,7 @@ int readdata(void *data, bam1_t *b) {
 // [[Rcpp::export]]
 Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
                                              Rcpp::String seqname, int pos,
-                                             bool indel,
-                                             bool verbose) {
+                                             bool indel, bool verbose) {
   if (pos > 1) {
     // htslib is 0-based
     pos = pos - 1;
@@ -93,9 +245,8 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
   bam_plp_destructor(plpiter, plpdestructor);
 
   // char seq_nt16_str[] = "=ACMGRSVTWYHKDBN";
-  const char seq_nt16_char[] = {'=', 'A', 'C', 'M', 'G', 'R',
-                                         'S', 'V', 'T', 'W', 'Y', 'H',
-                                         'K', 'D', 'B', 'N'};
+  const char seq_nt16_char[] = {'=', 'A', 'C', 'M', 'G', 'R', 'S', 'V',
+                                'T', 'W', 'Y', 'H', 'K', 'D', 'B', 'N'};
 
   // fetch an alignment to determine the UMI length first
   bam1_t *bam_tmp = NULL;
@@ -129,13 +280,8 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
     idx_to_allele[i] = BASES[i];
   }
 
-  // barcode -> UMI -> array of allele counts (A, T, C, G, -)
-  std::unordered_map<std::string, std::unordered_map<std::string, std::array<unsigned int, BASES_SIZE>>>
-      snps;
-
-  // barcode -> UMI -> variant -> count
-  std::unordered_map<std::string, std::unordered_map<std::string, std::unordered_map<std::string, unsigned int>>>
-      indels;
+  SNPTable snps;
+  IndelTable indels;
 
   // all barcodes
   std::set<std::string> barcodes;
@@ -166,7 +312,8 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
         if (plp[j].is_del) {
           snps[barcode][umi][allele_to_idx['-']]++;
         } else {
-          char allele = seq_nt16_char[bam_seqi(bam_get_seq(plp[j].b), plp[j].qpos)];
+          char allele =
+              seq_nt16_char[bam_seqi(bam_get_seq(plp[j].b), plp[j].qpos)];
           snps[barcode][umi][allele_to_idx[allele]]++;
         }
       } else { // count indel
@@ -176,8 +323,8 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
           // key as '+[inserted_bases]' e.g. '+A' or '+AT'
           std::string inserted_bases = "";
           for (int k = 1; k <= plp[j].indel; k++) {
-            inserted_bases += seq_nt16_char[bam_seqi(bam_get_seq(plp[j].b),
-                                                       plp[j].qpos + k)];
+            inserted_bases +=
+                seq_nt16_char[bam_seqi(bam_get_seq(plp[j].b), plp[j].qpos + k)];
           }
           indels[barcode][umi]["+" + inserted_bases]++;
           indel_keys.insert("+" + inserted_bases);
@@ -190,10 +337,8 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
     }
   }
 
-  Rcpp::NumericMatrix ret(
-    indel ? indel_keys.size() : BASES.size(),
-    barcodes.size()
-  );
+  Rcpp::NumericMatrix ret(indel ? indel_keys.size() : BASES.size(),
+                          barcodes.size());
   Rcpp::colnames(ret) = Rcpp::wrap(barcodes);
   if (indel) {
     Rcpp::rownames(ret) = Rcpp::wrap(indel_keys);
@@ -201,40 +346,40 @@ Rcpp::NumericMatrix variant_count_matrix_cpp(Rcpp::String bam_path,
     Rcpp::rownames(ret) = Rcpp::wrap(BASES);
   }
 
-  // perform majority voting for reads from the same UMI and barcode
+  std::unordered_map<std::string, std::vector<std::vector<std::string>>>
+      grouped_umis;
+  if (indel) {
+    grouped_umis = group_umis(indels, MAX_EDIT_DISTANCE);
+  } else {
+    grouped_umis = group_umis(snps, MAX_EDIT_DISTANCE);
+  }
+
+  // perform majority voting for reads from the same UMI group and barcode
   if (!indel) {
-    for (const auto &barcode : snps) {
-      for (const auto &umi : barcode.second) {
-        int max_idx = std::distance(
-          umi.second.begin(), 
-          std::max_element(umi.second.begin(), umi.second.end())
-        );
+    for (const auto &barcode : grouped_umis) {
+      for (const auto &umi_group : barcode.second) {
+        unsigned int max_idx =
+            grouped_umi_voting_snp(umi_group, snps[barcode.first]);
         auto bc_it = std::find(barcodes.begin(), barcodes.end(), barcode.first);
         if (bc_it == barcodes.end()) {
           Rcpp::stop("Barcode not found in barcodes");
         } else {
-          int bc_idx = std::distance(barcodes.begin(), bc_it);
+          unsigned int bc_idx = std::distance(barcodes.begin(), bc_it);
           ret(max_idx, bc_idx)++;
         }
       }
     }
   } else {
-    for (const auto &barcode : indels) {
-      for (const auto &umi : barcode.second) {
-        for (const auto &variant : umi.second) {
-          auto bc_it = std::find(barcodes.begin(), barcodes.end(), barcode.first);
-          if (bc_it == barcodes.end()) {
-            Rcpp::stop("Barcode not found in barcodes");
-          } else {
-            int bc_idx = std::distance(barcodes.begin(), bc_it);
-            auto variant_it = std::find(indel_keys.begin(), indel_keys.end(), variant.first);
-            if (variant_it == indel_keys.end()) {
-              Rcpp::stop("Variant not found in indel_keys");
-            } else {
-              int variant_idx = std::distance(indel_keys.begin(), variant_it);
-              ret(variant_idx, bc_idx)++;
-            }
-          }
+    for (const auto &barcode : grouped_umis) {
+      for (const auto &umi_group : barcode.second) {
+        unsigned int max_idx = grouped_umi_voting_indel(
+            umi_group, indels[barcode.first], indel_keys);
+        auto bc_it = std::find(barcodes.begin(), barcodes.end(), barcode.first);
+        if (bc_it == barcodes.end()) {
+          Rcpp::stop("Barcode not found in barcodes");
+        } else {
+          unsigned int bc_idx = std::distance(barcodes.begin(), bc_it);
+          ret(max_idx, bc_idx)++;
         }
       }
     }

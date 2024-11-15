@@ -4,14 +4,7 @@
 \alias{sc_mutations}
 \title{Variant count for single-cell data}
 \usage{
-sc_mutations(
-  bam_path,
-  seqnames,
-  positions,
-  indel = FALSE,
-  barcodes,
-  threads = 1
-)
+sc_mutations(bam_path, seqnames, positions, indel = FALSE, threads = 1)
 }
 \arguments{
 \item{bam_path}{character(1) or character(n): path to the bam file(s) aligned to the
@@ -22,10 +15,6 @@ reference genome (NOT the transcriptome! Unless the postions are also from the t
 \item{positions}{integer(n): positions, 1-based, same length as seqnames. The positions to count alleles.}
 
 \item{indel}{logical(1): whether to count indels (TRUE) or SNPs (FALSE).}
-
-\item{barcodes}{character(n) when bam_path is a single file, or list of character(n)
-when bam_path is a list of files paths. The cell barcodes to count alleles for.
-Only reads with these barcodes will be counted.}
 
 \item{threads}{integer(1): number of threads to use. Maximum number of threads is
 the number of bam files * number of positions.}
@@ -57,10 +46,7 @@ snps_tb <- sc_mutations(
   bam_path = file.path(outdir, "align2genome.bam"),
   seqnames = c("chr14", "chr14"),
   positions = c(1260, 2714), # positions of interest
-  indel = FALSE,
-  barcodes = read.delim(
-    system.file("extdata", "bc_allow.tsv.gz", package = "FLAMES"),
-    header = FALSE)$V1
+  indel = FALSE
 )
 head(snps_tb)
 snps_tb |>
