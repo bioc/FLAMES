@@ -80,6 +80,10 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
+      - name: Temporary workaround for macOS-latest
+        if: matrix.config.os == 'macOS-latest'
+        run: brew uninstall pkg-config@0.29.2
+
       ## R is already included in the Bioconductor docker images
       - name: Setup R from r-lib
         if: runner.os != 'Linux'
@@ -129,6 +133,8 @@ jobs:
           brew install libxml2
           echo "XML_CONFIG=/usr/local/opt/libxml2/bin/xml2-config" >> $GITHUB_ENV
 
+          brew install libjpeg
+
           ## Required to install magick as noted at
           ## https://github.com/r-lib/usethis/commit/f1f1e0d10c1ebc75fd4c18fa7e2de4551fd9978f#diff-9bfee71065492f63457918efcd912cf2
           brew install imagemagick@6
@@ -142,8 +148,12 @@ jobs:
           ## Required for tcltk
           brew install xquartz --cask
 
-          brew install minimap2
-          brew install samtools 
+          ## Temporary fix for libraries not found
+          ## https://pat-s.me/transitioning-from-x86-to-arm64-on-macos-experiences-of-an-r-user/
+          sudo ln -s /opt/homebrew/opt/* /usr/local/opt/
+          mkdir ~/.R
+          echo 'CFLAGS=-I/opt/homebrew/include -I/opt/homebrew/opt/jpeg/include' > ~/.R/Makevars
+          echo 'LDFLAGS+=-L/opt/homebrew/opt/jpeg/lib' >> ~/.R/Makevars
 
       - name: Install Windows system dependencies
         if: runner.os == 'Windows'
@@ -181,6 +191,13 @@ jobs:
           remotes::install_local(dependencies = TRUE, repos = BiocManager::repositories(), build_vignettes = FALSE, upgrade = TRUE)
         continue-on-error: true
         shell: Rscript {0}
+
+        # - name: Debug with SSH
+        #   if: matrix.config.os == 'macOS-latest'
+        #   uses: owenthereal/action-upterm@v1
+        #   with:
+        #     limit-access-to-actor: true
+        #     limit-access-to-users: ChangqingW
 
       - name: Install dependencies pass 2
         run: |

@@ -38,9 +38,7 @@ bool within_edit_dist(const std::string &s1, const std::string &s2) {
   for (std::size_t j = 1; j < len2; ++j)
     dist_holder[j] = j; //[0][j];
   for (std::size_t i = 1; i < len1; ++i)
-    dist_holder[i * len2] = 0; //[i][0];
-
-  unsigned int best = len2;
+    dist_holder[i * len2] = i; //[i][0];
 
   // loop over the distance matrix elements and calculate running distance
   for (std::size_t j = 1; j < len2; ++j) {
@@ -58,20 +56,12 @@ bool within_edit_dist(const std::string &s1, const std::string &s2) {
 
       if (min_value <= MAX_EDIT_DISTANCE)
         any_below_threshold = true;
-      if (j == (len2 - 1) && min_value < best) {
-        // if this is the last row in j
-        // check if this is the best running score
-        best = min_value;
-        if (best <= MAX_EDIT_DISTANCE) {
-          return true;
-        }
-      }
     }
     if (!any_below_threshold) { // early exit to save time.
       return false;
     }
   }
-  return best <= MAX_EDIT_DISTANCE;
+  return dist_holder.back() <= MAX_EDIT_DISTANCE;
 }
 
 // barcode -> UMI -> array of allele counts (A, T, C, G, -)
