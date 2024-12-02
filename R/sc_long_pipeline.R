@@ -191,6 +191,7 @@ sc_long_pipeline <- function(
           ),
           TSO_seq = config$barcode_parameters$TSO_seq,
           TSO_prime = config$barcode_parameters$TSO_prime,
+          cutadapt_minimum_length = config$barcode_parameters$cutadapt_minimum_length,
           full_length_only = config$barcode_parameters$full_length_only,
           max_bc_editdistance = config$barcode_parameters$max_bc_editdistance,
           max_flank_editdistance = config$barcode_parameters$max_flank_editdistance,

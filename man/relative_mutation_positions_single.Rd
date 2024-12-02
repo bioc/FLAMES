@@ -29,3 +29,4 @@ The gene annotation must be for one gene only. The mutations must be within the 
 The function will merge overlapping exons and calculate the relative position of each mutation
 within the gene body, excluding intronic regions.
 }
+\keyword{internal}

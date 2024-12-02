@@ -80,10 +80,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Temporary workaround for macOS-latest
-        if: matrix.config.os == 'macOS-latest'
-        run: brew uninstall pkg-config@0.29.2
-
       ## R is already included in the Bioconductor docker images
       - name: Setup R from r-lib
         if: runner.os != 'Linux'

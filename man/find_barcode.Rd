@@ -18,6 +18,7 @@ find_barcode(
   TSO_seq = "",
   TSO_prime = 3,
   strand = "+",
+  cutadapt_minimum_length = 1,
   full_length_only = FALSE
 )
 }
@@ -48,6 +49,8 @@ sample, and \code{path/prefix} for multiple samples.}
 
 \item{strand}{strand of the barcode pattern, either '+' or '-' (read will be reverse complemented
 after barcode matching if '-')}
+
+\item{cutadapt_minimum_length}{minimum read length after TSO trimming (cutadapt's --minimum-length)}
 
 \item{full_length_only}{boolean, when TSO sequence is provided, whether reads without TSO
 are to be discarded}
@@ -80,7 +83,9 @@ find_barcode(
   fastq = system.file("extdata", "fastq", "musc_rps24.fastq.gz", package = "FLAMES"),
   stats_out = file.path(outdir, "bc_stat"),
   reads_out = file.path(outdir, "demultiplexed.fq"),
-  barcodes_file = bc_allow
+  barcodes_file = bc_allow, 
+  TSO_seq = "AAGCAGTGGTATCAACGCAGAGTACATGGG", TSO_prime = 5,
+  strand = '-', cutadapt_minimum_length = 10, full_length_only = TRUE
 )
 # multi-sample
 fastq_dir <- tempfile()

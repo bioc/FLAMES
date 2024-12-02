@@ -1,6 +1,9 @@
 bibentry(
   bibtype = "article",
-  author = "Luyi Tian, Jafar S Jabbari, Rachel Thijssen, et al.",
+  author = c(person(given="Luyi", family="Tian"),
+             person(given="Jafar S", family="Jabbari"),
+             person(given="Rachel", family="Thijssen"),
+             person(given="et al.")),
   title = "Comprehensive Characterization of Single-Cell Full-Length Isoforms in Human and Mouse with Long-Read Sequencing",
   journal = "Genome Biology",
   year = 2021,

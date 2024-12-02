@@ -436,6 +436,7 @@ find_variants <- function(bam_path, reference, annotation, min_nucleotide_depth 
 #' The function will merge overlapping exons and calculate the relative position of each mutation
 #' within the gene body, excluding intronic regions.
 #'
+#' @keywords internal
 #' @importFrom GenomicRanges GRanges findOverlaps reduce
 #' @importFrom IRanges IRanges start end width
 #' @importFrom S4Vectors mcols queryHits subjectHits

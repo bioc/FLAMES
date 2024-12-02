@@ -21,6 +21,7 @@
 #' @param stats_out path of output stats file; similar to \code{reads_out}, e.g. provide
 #' \code{path/stats.tsv} for single sample, and \code{path/prefix} for multiple samples.
 #' @param threads number of threads to be used
+#' @param cutadapt_minimum_length minimum read length after TSO trimming (cutadapt's --minimum-length)
 #' @param full_length_only boolean, when TSO sequence is provided, whether reads without TSO
 #' are to be discarded
 #' @param pattern named character vector defining the barcode pattern
@@ -44,7 +45,9 @@
 #'   fastq = system.file("extdata", "fastq", "musc_rps24.fastq.gz", package = "FLAMES"),
 #'   stats_out = file.path(outdir, "bc_stat"),
 #'   reads_out = file.path(outdir, "demultiplexed.fq"),
-#'   barcodes_file = bc_allow
+#'   barcodes_file = bc_allow, 
+#'   TSO_seq = "AAGCAGTGGTATCAACGCAGAGTACATGGG", TSO_prime = 5,
+#'   strand = '-', cutadapt_minimum_length = 10, full_length_only = TRUE
 #' )
 #' # multi-sample
 #' fastq_dir <- tempfile()
@@ -69,7 +72,7 @@ find_barcode <- function(
       BC = paste0(rep("N", 16), collapse = ""),
       UMI = paste0(rep("N", 12), collapse = ""),
       polyT = paste0(rep("T", 9), collapse = "")
-    ), TSO_seq = "", TSO_prime = 3, strand = '+', full_length_only = FALSE) {
+    ), TSO_seq = "", TSO_prime = 3, strand = '+', cutadapt_minimum_length = 1, full_length_only = FALSE) {
 
   reverseCompliment <- strand != '+'
   # stats file columns
@@ -185,6 +188,9 @@ find_barcode <- function(
           "--json", tmp_json_file,
           if (full_length_only) {
             c("--untrimmed-output", noTSO_reads)
+          },
+          if (cutadapt_minimum_length > 0) {
+            c("--minimum-length", cutadapt_minimum_length)
           }
         )
       )
@@ -311,6 +317,7 @@ plot_demultiplex <- function(find_barcode_result) {
     dplyr::bind_rows() |>
     dplyr::group_by(BarcodeEditDist, Sample) |>
     dplyr::ungroup() |>
+    dplyr::mutate(BarcodeEditDist = factor(BarcodeEditDist)) |>
     ggplot2::ggplot(ggplot2::aes(x = Sample, fill = BarcodeEditDist)) +
     ggplot2::geom_bar(stat = "count", position = "dodge") +
     ggplot2::theme_minimal() +

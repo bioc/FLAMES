@@ -24,7 +24,8 @@
         },
         "strand": "-",
         "TSO_seq" : "AAGCAGTGGTATCAACGCAGAGTACATGGG",
-        "TSO_prime": 3,
+        "TSO_prime": 5,
+        "cutadapt_minimum_length": 10,
         "full_length_only" : false
     },
     "isoform_parameters": {
