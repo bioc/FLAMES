@@ -29,13 +29,11 @@
 #'   annot = annotation,
 #'   outdir = outdir
 #' )
-#' \dontrun{
 #' find_isoform(
 #'   annotation = annotation, genome_fa = genome_fa,
 #'   genome_bam = file.path(outdir, "align2genome.bam"),
 #'   outdir = outdir, config = config
 #' )
-#' }
 find_isoform <- function(annotation, genome_fa, genome_bam, outdir, config) {
   # pipeline types: singe_cell, single_cell_multisample, bulk
   cat(format(Sys.time(), "%X %a %b %d %Y"), "find_isoform\n")
@@ -76,8 +74,9 @@ find_isoform_bambu <- function(annotation, genome_fa, genome_bam, outdir, config
         TRUE,
         config$isoform_parameters$bambu_discovery),
       lowMemory = TRUE,
-      NDR = config$isoform_parameters$bambu_ndr,
-      ncore = ifelse(is.vector(genome_bam), length(genome_bam), 1)
+      NDR = config$isoform_parameters$bambu_ndr
+      # https://github.com/GoekeLab/bambu/issues/416#issuecomment-1987499886
+      # ncore = config$pipeline_parameters$threads
   ))
 
   bambu::writeToGTF(SummarizedExperiment::rowRanges(bambu_out), file.path(outdir, "isoform_annotated_unfiltered.gtf"))
