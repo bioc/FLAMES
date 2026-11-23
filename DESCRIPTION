@@ -1,6 +1,6 @@
 Package: FLAMES
 Title: FLAMES: Full Length Analysis of Mutations and Splicing in long read RNA-seq data
-Version: 2.7.1
+Version: 2.8.0
 Date: 2025-07-22
 Authors@R: c(
        person("Changqing", "Wang", role=c("aut", "cre"),
